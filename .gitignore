@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Env / secrets
+.env
+*.env
+!.env.example
+
+# Local database
+*.db
+*.sqlite
+*.sqlite3
+data/
+
+# Logs / local runtime
+*.log
+cf.out.log
+cf.err.log
+server.log
+server.out.log
+.env.bak*
+.env.bak-encoding
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

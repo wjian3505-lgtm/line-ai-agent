@@ -1,0 +1,12 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+line-bot-sdk>=3.14
+google-genai>=1.20
+fugle-marketdata>=2.4.1
+SQLAlchemy>=2.0
+psycopg2-binary>=2.9
+python-dotenv>=1.0
+google-api-python-client>=2.150
+google-auth-httplib2>=0.2
+google-auth-oauthlib>=1.2
+matplotlib>=3.8
