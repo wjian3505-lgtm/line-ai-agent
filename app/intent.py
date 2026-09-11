@@ -25,6 +25,7 @@ class Intent(str, Enum):
     STOCK_TODAY_QUERIES = "stock_today_queries"
     STOCK_MARKET = "stock_market"
     STOCK_QUOTE = "stock_quote"
+    STOCK_TECH = "stock_tech"
     OTHER = "other"  # 交 B
 
 
@@ -38,7 +39,18 @@ _CALENDAR_DOMAIN = re.compile(r"(行程|安排|行事曆|日程|行程表|開會
 
 _STOCK_BLOCK_AS_NAME = re.compile(
     r"(今天|今日|明天|昨天|你好|謝謝|大盤|八月|本月|今年|"
-    r"花費|記帳|行程|安排|消費|支出|明細|盈虧|報酬)"
+    r"花費|記帳|行程|安排|消費|支出|明細|盈虧|報酬|"
+    r"這是|那是|是不是|對不對|最新|即時|即時嗎|真的|準不準|"
+    r"可以|能不能|為什麼|怎麼|如何|"
+    r"我的|股票|淨利|淨值|資產|持有|目前|全部|清單|列表|"
+    r"判斷|分析|技術面)"
+)
+
+# 口語疑問句：應交給 Gemini，不要當公司名／股價查詢
+_STOCK_META_QUESTION = re.compile(
+    r"(這是|那是|是不是|對不對).{0,12}(股價|報價|現價|最新|即時)|"
+    r"(股價|報價|現價).{0,6}(嗎|嘛|？|\?)|"
+    r"^(最新|即時)?\s*(股價|報價)\s*(嗎|嘛|？|\?)?$"
 )
 
 
@@ -146,6 +158,54 @@ def looks_like_calendar_list(text: str) -> bool:
     return False
 
 
+def extract_tech_query(text: str) -> str | None:
+    """從「判斷 2330／分析台積電／AAPL 技術面」抽出標的；沒有則 None。"""
+    t = (text or "").strip()
+    if not t or not re.search(r"(判斷|分析|技術面)", t):
+        return None
+    if _EXPENSE_DOMAIN.search(t) or _CALENDAR_DOMAIN.search(t):
+        return None
+    if re.search(r"(記帳|花費|行程|開會|會議|行事曆|股價|盈虧|報酬)", t):
+        return None
+
+    m = re.match(
+        r"^(?:請)?(?:幫我)?"
+        r"(?:做|來)?(?:個)?"
+        r"(?:技術面)?"
+        r"\s*(?:判斷|分析)\s*"
+        r"(?:一下|看看?)?\s*"
+        r"(?:技術面)?\s*"
+        r"(.+)$",
+        t,
+    )
+    query = ""
+    if m:
+        query = m.group(1).strip()
+    else:
+        m2 = re.match(
+            r"^(.+?)\s*(?:的)?\s*(?:技術面)?\s*(?:判斷|分析)\s*$",
+            t,
+        )
+        if m2:
+            query = m2.group(1).strip()
+    query = re.sub(r"^(的|一下|看看?)\s*", "", query).strip()
+    query = re.sub(r"(技術面|判斷|分析)", "", query).strip()
+    return query if _is_plausible_tech_target(query) else None
+
+
+def _is_plausible_tech_target(query: str) -> bool:
+    q = (query or "").strip()
+    if not q:
+        return False
+    if re.fullmatch(r"[A-Za-z]{0,2}\d{3,5}[A-Za-z]?", q):
+        return True
+    if re.fullmatch(r"[A-Za-z]{1,5}(?:[.-][A-Za-z]{1,2})?", q):
+        return True
+    if re.fullmatch(r"[一-龥]{2,8}", q):
+        return True
+    return False
+
+
 def classify_intent(text: str) -> Intent:
     """依優先序回傳單一意圖（互斥）。"""
     t = (text or "").strip()
@@ -203,14 +263,21 @@ def classify_intent(text: str) -> Intent:
     if looks_like_calendar_list(t):
         return Intent.CALENDAR_LIST
 
-    # 7) 股市專用
+    # 7) 技術面判定（須在股價之前，避免「判斷 2330」被當報價）
+    if extract_tech_query(t):
+        return Intent.STOCK_TECH
+
+    # 8) 股市專用
     if re.search(r"(今天|今日).*(查|看).*(股|股票)|查詢了哪些股票|查了哪些股票", t):
         return Intent.STOCK_TODAY_QUERIES
 
     if re.search(
         r"(持股|持倉|投資組合|portfolio|盈虧|報酬率|損益|未實現|"
         r"股票收益|持股收益|投資收益|今日收益|今天收益|"
-        r"收益|獲利|賠錢|賠多少|賺多少)",
+        r"收益|獲利|賠錢|賠多少|賺多少|"
+        r"我的股票|我的持股|目前股票|目前持股|持有股票|"
+        r"股票淨利|持股淨利|淨值|未實現損益|"
+        r"^(股票|持股)$)",
         t,
     ) and not re.search(r"買了|買入|賣了|結清", t):
         # 「今日花費」等記帳句不要誤判
@@ -231,33 +298,47 @@ def classify_intent(text: str) -> Intent:
     ):
         return Intent.STOCK_MOVERS
 
-    # 8) 記帳寫入（有金額句）
+    # 9) 記帳寫入（有金額句）
     if looks_like_expense_write(t):
         return Intent.EXPENSE_WRITE
 
-    # 9) 股價：嚴格
+    # 10) 股價：嚴格
     if _EXPENSE_DOMAIN.search(t) or _CALENDAR_DOMAIN.search(t):
         return Intent.OTHER
 
-    m = re.fullmatch(
+    # 「這是最新股價嗎」這類追問 → OTHER，交給 Gemini
+    if _STOCK_META_QUESTION.search(t):
+        return Intent.OTHER
+    if re.search(r"[嗎嘛呢？?]$", t):
+        return Intent.OTHER
+
+    # 純代號（可帶「股價」）
+    m_code = re.fullmatch(
         r"(?:查詢?|看看?)?\s*"
-        r"([A-Za-z]{0,2}\d{3,5}[A-Za-z]?|[一-龥A-Za-z]{1,8})"
+        r"([A-Za-z]{0,2}\d{3,5}[A-Za-z]?)"
         r"\s*(?:的)?\s*(?:股價|報價|多少|現價)?",
         t,
     )
-    if m:
-        query = m.group(1)
-        if _STOCK_BLOCK_AS_NAME.search(query) or _STOCK_BLOCK_AS_NAME.search(t):
-            return Intent.OTHER
-        is_code = bool(re.fullmatch(r"[A-Za-z]{0,2}\d{3,5}[A-Za-z]?", query))
-        has_quote_word = bool(re.search(r"(股價|報價|現價)", t))
-        # 純代號，或「欣興股價」；禁止把「今日總花費」當公司名
-        if is_code:
+    if m_code and not _STOCK_BLOCK_AS_NAME.search(t):
+        return Intent.STOCK_QUOTE
+
+    # 「欣興股價」「台積電現價」— 名稱後必須有報價詞，避免整句被當公司名
+    m_named = re.fullmatch(
+        r"(?:查詢?|看看?)?\s*"
+        r"([一-龥A-Za-z]{1,8})"
+        r"\s*(?:的)?\s*(?:股價|報價|多少|現價)",
+        t,
+    )
+    if m_named:
+        query = m_named.group(1)
+        if not _STOCK_BLOCK_AS_NAME.search(query) and not _STOCK_BLOCK_AS_NAME.search(t):
             return Intent.STOCK_QUOTE
-        if has_quote_word and len(query) <= 8:
-            return Intent.STOCK_QUOTE
-        # 極短公司名単独出現（台積電、欣興）且整句幾乎只有名稱
-        if len(t) <= 8 and len(query) >= 2 and not _EXPENSE_DOMAIN.search(t):
+
+    # 極短公司名単独出現（台積電、欣興）
+    m_short = re.fullmatch(r"([一-龥A-Za-z]{2,6})", t)
+    if m_short:
+        query = m_short.group(1)
+        if not _STOCK_BLOCK_AS_NAME.search(query) and not _EXPENSE_DOMAIN.search(t):
             return Intent.STOCK_QUOTE
 
     return Intent.OTHER

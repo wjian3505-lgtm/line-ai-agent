@@ -510,6 +510,50 @@ def category_breakdown(
     return "\n".join(lines), dict(by_cat), label
 
 
+def _cjk_font_properties():
+    """挑選可用的繁中／CJK 字型（本機 Windows 或 Linux 容器）。"""
+    from matplotlib import font_manager
+    from matplotlib.font_manager import FontProperties
+
+    preferred_names = (
+        "Noto Sans CJK TC",
+        "Noto Sans CJK JP",
+        "Noto Sans TC",
+        "Noto Sans CJK",
+        "WenQuanYi Zen Hei",
+        "WenQuanYi Micro Hei",
+        "Microsoft JhengHei",
+        "Microsoft YaHei",
+        "PingFang TC",
+        "Arial Unicode MS",
+    )
+    available = {f.name for f in font_manager.fontManager.ttflist}
+    for name in preferred_names:
+        if name in available:
+            return FontProperties(family=name)
+
+    # 依常見檔名路徑搜尋（Docker / fonts-noto-cjk）
+    path_globs = (
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK*.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK*.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        "C:/Windows/Fonts/msjh.ttc",
+        "C:/Windows/Fonts/msyh.ttc",
+    )
+    import glob
+
+    for pattern in path_globs:
+        for path in glob.glob(pattern):
+            if os.path.isfile(path):
+                try:
+                    font_manager.fontManager.addfont(path)
+                except Exception:  # noqa: BLE001
+                    pass
+                return FontProperties(fname=path)
+    return FontProperties()
+
+
 def make_category_pie_chart(by_cat: dict[str, float], label: str) -> Optional[str]:
     if not by_cat:
         return None
@@ -518,11 +562,15 @@ def make_category_pie_chart(by_cat: dict[str, float], label: str) -> Optional[st
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
+    font_prop = _cjk_font_properties()
+    family = font_prop.get_name()
+    plt.rcParams["font.family"] = "sans-serif"
     plt.rcParams["font.sans-serif"] = [
+        family,
+        "Noto Sans CJK TC",
+        "WenQuanYi Zen Hei",
         "Microsoft JhengHei",
-        "Microsoft YaHei",
-        "Arial Unicode MS",
-        "sans-serif",
+        "DejaVu Sans",
     ]
     plt.rcParams["axes.unicode_minus"] = False
 
@@ -532,17 +580,25 @@ def make_category_pie_chart(by_cat: dict[str, float], label: str) -> Optional[st
     colors = ["#4E79A7", "#F28E2B", "#E15759", "#76B7B2", "#59A14F", "#B07AA1"]
 
     fig, ax = plt.subplots(figsize=(6, 6), dpi=140)
-    _wedges, _texts, autotexts = ax.pie(
+    _wedges, texts, autotexts = ax.pie(
         sizes,
         labels=labels,
         autopct=lambda p: f"{p:.1f}%" if p >= 3 else "",
         startangle=90,
         colors=colors[: len(sizes)],
-        textprops={"fontsize": 11},
+        textprops={"fontsize": 11, "fontproperties": font_prop},
     )
+    for t in texts:
+        t.set_fontproperties(font_prop)
+        t.set_fontsize(11)
     for t in autotexts:
         t.set_fontsize(10)
-    ax.set_title(f"{label} 消費類別占比", fontsize=14, pad=16)
+    ax.set_title(
+        f"{label} 消費類別占比",
+        fontsize=14,
+        pad=16,
+        fontproperties=font_prop,
+    )
     ax.axis("equal")
 
     out_dir = os.path.join("data", "charts")

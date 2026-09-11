@@ -10,3 +10,7 @@ google-api-python-client>=2.150
 google-auth-httplib2>=0.2
 google-auth-oauthlib>=1.2
 matplotlib>=3.8
+pandas>=2.1
+yfinance>=0.2.40
+# Python 3.14 裝不了（依賴 numba）；3.12（Dockerfile）可裝。裝失敗時 indicators 自動改 pandas 自算
+pandas-ta>=0.3.14b0; python_version < "3.14"

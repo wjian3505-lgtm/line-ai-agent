@@ -2,8 +2,11 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# 系統相依（psycopg2 執行期不需要，但保留基本工具）
+# 圓餅圖中文需要 CJK 字型（否則會變方塊）
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    fonts-noto-cjk \
+    fontconfig \
+    && fc-cache -fv \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

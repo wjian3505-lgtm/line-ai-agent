@@ -28,7 +28,7 @@ from .expenses import (
     record_expense,
     reset_pending_images,
 )
-from .intent import Intent, classify_intent, looks_like_expense_write
+from .intent import Intent, classify_intent, extract_tech_query, looks_like_expense_write
 from .portfolio import (
     parse_stock_buy_utterance,
     portfolio_summary_data,
@@ -86,6 +86,7 @@ SYSTEM_PROMPT = """你是一位貼心、可靠的中文個人助理，服務於 
 - 若使用者期間很模糊（例如寒假、開春到端午），先自行換算成明確起迄再呼叫 google_calendar_list；不要編造行程內容。
 - 跨年預設：未寫年份且結束月 < 開始月（如 11-2月）→ 今年該月到明年該月。
 - 查股價用 stock_quote；漲跌幅排行用 stock_movers；持股用 my_portfolio。
+- 若使用者問「這是最新股價嗎／準嗎／即時嗎」：說明持股卡的現價來自 Fugle 行情（開盤中為即時／近即時，收盤後為收盤價）；必要時可再呼叫 stock_quote 或 my_portfolio 核對，不要把整句話當成股票代號。
 """
 
 _FALLBACK_MODELS = (
@@ -270,10 +271,19 @@ def _a_stocks(user_id: str, text: str, intent: Intent) -> AgentReply | None:
 
     m = re.fullmatch(
         r"(?:查詢?|看看?)?\s*"
-        r"([A-Za-z]{0,2}\d{3,5}[A-Za-z]?|[一-龥A-Za-z]{1,8})"
+        r"([A-Za-z]{0,2}\d{3,5}[A-Za-z]?)"
         r"\s*(?:的)?\s*(?:股價|報價|多少|現價)?",
         t,
     )
+    if not m:
+        m = re.fullmatch(
+            r"(?:查詢?|看看?)?\s*"
+            r"([一-龥A-Za-z]{1,8})"
+            r"\s*(?:的)?\s*(?:股價|報價|多少|現價)",
+            t,
+        )
+    if not m:
+        m = re.fullmatch(r"([一-龥A-Za-z]{2,6})", t)
     if not m:
         return None
     query = m.group(1)
@@ -283,14 +293,18 @@ def _a_stocks(user_id: str, text: str, intent: Intent) -> AgentReply | None:
 
     with session_scope() as session:
         q = get_stock_quote(query)
-        if not q.get("error"):
-            log_stock_query(
-                session,
-                user_id,
-                symbol=str(q.get("symbol") or query),
-                name=q.get("name"),
-                price=float(q["price"]) if q.get("price") is not None else None,
-            )
+        if q.get("error"):
+            # 查不到且像口語／疑問 → 交給 Gemini，不要硬回「找不到代號」
+            if re.search(r"[嗎嘛呢？?]|這是|最新|即時", t) or len(query) > 6:
+                return None
+            return _reply(format_quote(q), flex_ui.stock_quote_card(q), title="查詢失敗")
+        log_stock_query(
+            session,
+            user_id,
+            symbol=str(q.get("symbol") or query),
+            name=q.get("name"),
+            price=float(q["price"]) if q.get("price") is not None else None,
+        )
         return _reply(format_quote(q), flex_ui.stock_quote_card(q), title="報價")
 
 
@@ -368,6 +382,37 @@ def _a_stock_buy(user_id: str, text: str) -> AgentReply | None:
     )
 
 
+def _a_stock_tech(text: str) -> AgentReply:
+    """技術面判定：判斷／分析 + 代碼或名稱。"""
+    from .analyzer import DISCLAIMER, run_analysis
+
+    query = extract_tech_query(text)
+    if not query:
+        return _reply(
+            "請加上股票代碼或名稱，例如：判斷 2330、分析台積電、分析 AAPL。",
+            title="技術面判定",
+        )
+    result = run_analysis(query)
+    if not result.get("ok"):
+        return _reply(result.get("error") or "技術面判定失敗。", title="技術面判定")
+    payload = result["payload"]
+    alt = result.get("alt_text") or f"{result.get('symbol')} 技術面判定"
+    return _reply(
+        alt,
+        flex_ui.stock_tech_card(
+            symbol=str(result.get("symbol") or query),
+            name=str(result.get("name") or ""),
+            verdict=str(payload.get("verdict") or "觀望"),
+            matched_rules=list(payload.get("matched_rules") or []),
+            failed_rules=list(payload.get("failed_rules") or []),
+            risk_note=str(payload.get("risk_note") or "—"),
+            confidence=str(payload.get("confidence") or "中"),
+            disclaimer=DISCLAIMER,
+        ),
+        title="技術面判定",
+    )
+
+
 def try_route_a(user_id: str, text: str) -> AgentReply | None:
     """先 classify_intent，再進對應 handler（不再靠各 handler 互搶正則）。"""
     t = (text or "").strip()
@@ -379,6 +424,9 @@ def try_route_a(user_id: str, text: str) -> AgentReply | None:
 
     if intent == Intent.STOCK_BUY:
         return _a_stock_buy(user_id, t)
+
+    if intent == Intent.STOCK_TECH:
+        return _a_stock_tech(t)
 
     if intent in {
         Intent.EXPENSE_DELETE,
@@ -443,7 +491,8 @@ def _should_use_portfolio_flex(user_text: str, reply: str = "") -> bool:
         return False
     return bool(
         re.search(
-            r"(持股|持倉|投資組合|盈虧|報酬|收益|獲利|損益|買入價|現在價|總市值|總成本|賺\s*\d|賠\s*\d)",
+            r"(持股|持倉|投資組合|盈虧|報酬|收益|獲利|損益|買入價|現在價|總市值|總成本|賺\s*\d|賠\s*\d|"
+            r"我的股票|股票淨利|淨值)",
             t,
         )
     )

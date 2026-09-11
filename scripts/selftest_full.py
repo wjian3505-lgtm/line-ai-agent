@@ -167,6 +167,9 @@ def main() -> int:
         ("2330", Intent.STOCK_QUOTE),
         ("00981A 28塊 買2張", Intent.STOCK_BUY),
         ("這週行程", Intent.CALENDAR_LIST),
+        ("判斷 2330", Intent.STOCK_TECH),
+        ("分析台積電", Intent.STOCK_TECH),
+        ("分析 AAPL", Intent.STOCK_TECH),
     ]:
         got = classify_intent(phrase)
         check(f"intent {phrase}", got == want, f"{got.value}")
