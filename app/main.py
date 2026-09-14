@@ -58,6 +58,8 @@ def health() -> dict:
         "status": "ok",
         "service": "line-ai-agent",
         "public_base_url": settings.public_base_url,
+        "build": "stock-tech-v2",
+        "features": {"stock_tech": True},
         "google_calendar": {
             "configured": calendar_google.calendar_configured(),
             "authorized": calendar_google.calendar_authorized(),

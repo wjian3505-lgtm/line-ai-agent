@@ -210,9 +210,11 @@ def extract_tech_query(text: str) -> str | None:
 
 def _normalize_tech_target(query: str) -> str:
     q = (query or "").strip()
-    # 常見多打一位：判斷009470 → 00947
+    # 常見多打一位：判斷009470 → 00947；判斷23300 → 2330
     if re.fullmatch(r"00\d{4}", q):
         return q[:5]
+    if re.fullmatch(r"\d{5}", q) and q.endswith("0"):
+        return q[:4]
     return q
 
 

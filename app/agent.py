@@ -550,6 +550,9 @@ def ask_gemini_b(user_id: str, text: str) -> AgentReply:
                         logger.info("改用備援模型成功：%s", model)
                     if _should_use_portfolio_flex(text, reply):
                         return _portfolio_flex_reply(user_id)
+                    # 「判斷／分析」絕不能被包成股價卡
+                    if re.search(r"(判斷|分析|技術面)", text or ""):
+                        return _reply(reply or "技術面判定失敗。", title="技術面判定")
                     # 若回文像股價漲跌，仍盡量紅漲綠跌上色
                     if re.search(r"(\(\s*[+\-]|\+\d|\-\d|▲|▼|漲|跌|賺|賠)", reply or ""):
                         return AgentReply(
