@@ -168,6 +168,7 @@ def main() -> int:
         ("00981A 28塊 買2張", Intent.STOCK_BUY),
         ("這週行程", Intent.CALENDAR_LIST),
         ("判斷 2330", Intent.STOCK_TECH),
+        ("判斷00947", Intent.STOCK_TECH),
         ("分析台積電", Intent.STOCK_TECH),
         ("分析 AAPL", Intent.STOCK_TECH),
     ]:

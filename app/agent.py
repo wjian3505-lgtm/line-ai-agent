@@ -86,6 +86,7 @@ SYSTEM_PROMPT = """你是一位貼心、可靠的中文個人助理，服務於 
 - 若使用者期間很模糊（例如寒假、開春到端午），先自行換算成明確起迄再呼叫 google_calendar_list；不要編造行程內容。
 - 跨年預設：未寫年份且結束月 < 開始月（如 11-2月）→ 今年該月到明年該月。
 - 查股價用 stock_quote；漲跌幅排行用 stock_movers；持股用 my_portfolio。
+- 使用者說「判斷／分析」某檔股票、要買或賣的建議時，必須呼叫 stock_technical_analysis，不要只回 stock_quote。
 - 若使用者問「這是最新股價嗎／準嗎／即時嗎」：說明持股卡的現價來自 Fugle 行情（開盤中為即時／近即時，收盤後為收盤價）；必要時可再呼叫 stock_quote 或 my_portfolio 核對，不要把整句話當成股票代號。
 """
 
@@ -403,10 +404,12 @@ def _a_stock_tech(text: str) -> AgentReply:
             symbol=str(result.get("symbol") or query),
             name=str(result.get("name") or ""),
             verdict=str(payload.get("verdict") or "觀望"),
+            action=str(payload.get("action") or ""),
             matched_rules=list(payload.get("matched_rules") or []),
             failed_rules=list(payload.get("failed_rules") or []),
             risk_note=str(payload.get("risk_note") or "—"),
             confidence=str(payload.get("confidence") or "中"),
+            snapshot=payload.get("snapshot") if isinstance(payload.get("snapshot"), dict) else None,
             disclaimer=DISCLAIMER,
         ),
         title="技術面判定",
@@ -575,6 +578,10 @@ def ask_gemini_b(user_id: str, text: str) -> AgentReply:
 
 def handle_user_message(user_id: str, text: str) -> AgentReply:
     """A 先；沒命中再 B。回覆帶 Flex。"""
+    # 硬閘：判斷／分析某檔 → 技術面買賣建議，不要落到查股價
+    if extract_tech_query(text or ""):
+        return _a_stock_tech(text)
+
     # 硬閘：收益／持股句直接出紅漲綠跌卡，避免被 Gemini 黑字蓋掉
     if _should_use_portfolio_flex(text or ""):
         return _portfolio_flex_reply(user_id)

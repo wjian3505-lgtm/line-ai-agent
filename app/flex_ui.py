@@ -698,30 +698,53 @@ def stock_tech_card(
     symbol: str,
     name: str = "",
     verdict: str,
+    action: str = "",
     matched_rules: list[str] | None = None,
     failed_rules: list[str] | None = None,
     risk_note: str = "",
     confidence: str = "中",
+    snapshot: dict | None = None,
     disclaimer: str = "本判定僅依據預設技術規則，非投資建議",
 ) -> dict:
-    """技術面判定卡。"""
+    """技術面判定卡：建議買入／賣出／觀望。"""
     title = f"{symbol} {name}".strip()
-    if verdict == "符合進場":
+    label = action or (
+        "建議買入" if verdict == "符合進場"
+        else "建議賣出" if verdict == "符合出場"
+        else "建議觀望"
+    )
+    if "買入" in label:
         v_color = C_OK
-    elif verdict == "符合出場":
+    elif "賣出" in label:
         v_color = C_WARN
     else:
         v_color = C_ACCENT
     matched = "、".join(matched_rules or []) or "無"
     failed = "、".join(failed_rules or []) or "無"
+    snap = snapshot or {}
     contents = [
-        _text(f"判定：{verdict}", size="lg", weight="bold", color=v_color),
-        _sep("lg"),
-        _text(f"命中：{matched}", size="sm", color=C_OK, margin="md"),
-        _text(f"未中：{failed}", size="sm", color=C_WARN, margin="sm"),
-        _text(f"風險：{risk_note or '—'}", size="sm", color=C_TITLE, margin="md"),
-        _text(f"信心度：{confidence or '中'}", size="sm", color=C_MUTED, margin="sm"),
-        _sep("lg"),
-        _text(disclaimer, size="xs", color=C_MUTED, margin="md"),
+        _text(label, size="xl", weight="bold", color=v_color),
+        _text(str(verdict), size="xs", color=C_MUTED, margin="xs"),
     ]
-    return bubble(title, contents, subtitle="技術面判定")
+    if snap:
+        contents.append(
+            _text(
+                f"收盤 {snap.get('close')}｜中軌 {snap.get('bb_middle')}｜"
+                f"RSI {snap.get('rsi')}｜MACD柱 {snap.get('macd_hist')}",
+                size="xs",
+                color=C_MUTED,
+                margin="sm",
+            )
+        )
+    contents.extend(
+        [
+            _sep("lg"),
+            _text(f"命中：{matched}", size="sm", color=C_OK, margin="md"),
+            _text(f"未中：{failed}", size="sm", color=C_WARN, margin="sm"),
+            _text(f"風險：{risk_note or '—'}", size="sm", color=C_TITLE, margin="md"),
+            _text(f"信心度：{confidence or '中'}", size="sm", color=C_MUTED, margin="sm"),
+            _sep("lg"),
+            _text(disclaimer, size="xs", color=C_MUTED, margin="md"),
+        ]
+    )
+    return bubble(title, contents, subtitle="技術面買賣建議")

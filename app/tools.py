@@ -226,13 +226,12 @@ def build_tools(session: Session, user_id: str) -> list[Callable]:
 
     # ---------- 股市 ----------
     def stock_quote(symbol: str) -> str:
-        """查詢「單一個股」的即時報價與漲跌，這是查任何一支股票的首選工具。
+        """查詢「單一個股」的即時報價與漲跌。只要現價／漲跌時用這個。
 
-        上市、上櫃、ETF 都可查。symbol 可傳代號或公司名稱，系統會自動對應。
-        每次成功查詢都會自動記入「今日查詢紀錄」。
+        若使用者要「判斷／分析／該買還是賣／技術面」，請改用 stock_technical_analysis，不要只用本工具。
 
         Args:
-            symbol: 台股代號或公司名稱，例如 2330、台積電、3037、欣興、0050。
+            symbol: 台股代號或公司名稱，例如 2330、台積電、3037、欣興、0050、00947。
         """
         q = get_stock_quote(symbol)
         if not q.get("error"):
@@ -267,6 +266,22 @@ def build_tools(session: Session, user_id: str) -> list[Callable]:
         if d in ("both", "全部", "漲跌", "漲跌幅"):
             return get_stock_movers_both(limit=limit, market=market)
         return get_stock_movers(direction=d, limit=limit, market=market)
+
+    def stock_technical_analysis(symbol: str) -> str:
+        """依布林、RSI、MACD 規則給出買入／賣出／觀望建議。
+
+        當使用者說「判斷 2330」「分析台積電」「00947 該買還是賣」「技術面」時必須用這個。
+        不要用 stock_quote 代替。
+
+        Args:
+            symbol: 台股或美股代號、或公司名稱，例如 2330、00947、台積電、AAPL。
+        """
+        from .analyzer import run_analysis
+
+        result = run_analysis(symbol)
+        if not result.get("ok"):
+            return result.get("error") or "技術面判定失敗。"
+        return result.get("alt_text") or str(result.get("payload") or "")
 
     def today_stock_queries() -> str:
         """統整使用者「今天」查詢過哪些股票（含當時價格）。
@@ -392,6 +407,7 @@ def build_tools(session: Session, user_id: str) -> list[Callable]:
         add_note,
         search_notes,
         stock_quote,
+        stock_technical_analysis,
         market_summary,
         stock_movers,
         today_stock_queries,

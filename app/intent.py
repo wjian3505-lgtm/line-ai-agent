@@ -158,14 +158,17 @@ def looks_like_calendar_list(text: str) -> bool:
     return False
 
 
+_TECH_TICKER = re.compile(r"[A-Za-z]{0,2}\d{3,6}[A-Za-z]?|[A-Za-z]{1,5}(?:[.-][A-Za-z]{1,2})?|[一-龥]{2,8}")
+
+
 def extract_tech_query(text: str) -> str | None:
-    """從「判斷 2330／分析台積電／AAPL 技術面」抽出標的；沒有則 None。"""
+    """從「判斷 2330／判斷00947／分析台積電」抽出標的；沒有則 None。"""
     t = (text or "").strip()
     if not t or not re.search(r"(判斷|分析|技術面)", t):
         return None
     if _EXPENSE_DOMAIN.search(t) or _CALENDAR_DOMAIN.search(t):
         return None
-    if re.search(r"(記帳|花費|行程|開會|會議|行事曆|股價|盈虧|報酬)", t):
+    if re.search(r"(記帳|花費|行程|開會|會議|行事曆|股價|盈虧|報酬|我的股票|持股)", t):
         return None
 
     m = re.match(
@@ -190,14 +193,34 @@ def extract_tech_query(text: str) -> str | None:
             query = m2.group(1).strip()
     query = re.sub(r"^(的|一下|看看?)\s*", "", query).strip()
     query = re.sub(r"(技術面|判斷|分析)", "", query).strip()
-    return query if _is_plausible_tech_target(query) else None
+    if _is_plausible_tech_target(query):
+        return _normalize_tech_target(query)
+
+    # 「判斷00947」「幫我分析一下 0050」：從整句再抽一次代號／名稱
+    m3 = re.search(
+        r"(?:判斷|分析|技術面)\s*(?:一下|看看?)?\s*" + _TECH_TICKER.pattern,
+        t,
+    )
+    if m3:
+        token = re.sub(r"^(?:判斷|分析|技術面)\s*(?:一下|看看?)?\s*", "", m3.group(0)).strip()
+        if _is_plausible_tech_target(token):
+            return _normalize_tech_target(token)
+    return None
+
+
+def _normalize_tech_target(query: str) -> str:
+    q = (query or "").strip()
+    # 常見多打一位：判斷009470 → 00947
+    if re.fullmatch(r"00\d{4}", q):
+        return q[:5]
+    return q
 
 
 def _is_plausible_tech_target(query: str) -> bool:
     q = (query or "").strip()
     if not q:
         return False
-    if re.fullmatch(r"[A-Za-z]{0,2}\d{3,5}[A-Za-z]?", q):
+    if re.fullmatch(r"[A-Za-z]{0,2}\d{3,6}[A-Za-z]?", q):
         return True
     if re.fullmatch(r"[A-Za-z]{1,5}(?:[.-][A-Za-z]{1,2})?", q):
         return True
@@ -215,6 +238,10 @@ def classify_intent(text: str) -> Intent:
     # 1) 買股
     if looks_like_stock_buy(t):
         return Intent.STOCK_BUY
+
+    # 1.5) 技術面買賣建議（須最先攔截「判斷00947」，避免落到查股價）
+    if extract_tech_query(t):
+        return Intent.STOCK_TECH
 
     # 2) 記帳刪除
     if re.search(
@@ -262,10 +289,6 @@ def classify_intent(text: str) -> Intent:
     # 6) 行程列表（含 8-10月有什麼、下半年安排）
     if looks_like_calendar_list(t):
         return Intent.CALENDAR_LIST
-
-    # 7) 技術面判定（須在股價之前，避免「判斷 2330」被當報價）
-    if extract_tech_query(t):
-        return Intent.STOCK_TECH
 
     # 8) 股市專用
     if re.search(r"(今天|今日).*(查|看).*(股|股票)|查詢了哪些股票|查了哪些股票", t):
