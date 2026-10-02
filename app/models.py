@@ -36,6 +36,8 @@ class Expense(Base):
     note: Mapped[str | None] = mapped_column(String(255), nullable=True)
     spent_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    kind: Mapped[str] = mapped_column(String(16), default="expense")  # expense / refund / income
+    related_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class Note(Base):

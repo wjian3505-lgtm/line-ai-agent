@@ -33,10 +33,21 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
 def init_db() -> None:
-    """建立所有資料表（若不存在）。"""
+    """建立所有資料表（若不存在），並補上既有 expenses 缺的欄位。"""
+    from sqlalchemy import inspect, text
+
     from . import models  # noqa: F401 匯入以註冊 ORM 模型
 
     Base.metadata.create_all(bind=engine)
+    insp = inspect(engine)
+    if "expenses" not in insp.get_table_names():
+        return
+    cols = {c["name"] for c in insp.get_columns("expenses")}
+    with engine.begin() as conn:
+        if "kind" not in cols:
+            conn.execute(text("ALTER TABLE expenses ADD COLUMN kind VARCHAR(16) DEFAULT 'expense'"))
+        if "related_id" not in cols:
+            conn.execute(text("ALTER TABLE expenses ADD COLUMN related_id INTEGER"))
 
 
 @contextmanager

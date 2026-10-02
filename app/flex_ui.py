@@ -211,16 +211,28 @@ def expense_added(
     note: str,
     when_label: str,
 ) -> dict:
+    if amount < 0:
+        title, subtitle = "已收回", "退回原支出"
+        money = f"-${abs(amount):,.0f}"
+        color = C_OK
+    elif category == "收入":
+        title, subtitle = "已記收入", "不計入花費"
+        money = f"${amount:,.0f}"
+        color = C_OK
+    else:
+        title, subtitle = "已記帳", "日常花費"
+        money = f"${amount:,.0f}"
+        color = C_ACCENT
     return bubble(
-        "已記帳",
+        title,
         [
             _kv_row("編號", f"#{expense_id}"),
             _kv_row("項目", note or "（無）"),
-            _kv_row("金額", f"${amount:,.0f}", C_ACCENT),
+            _kv_row("金額", money, color),
             _kv_row("類別", category),
             _kv_row("日期", when_label),
         ],
-        subtitle="日常花費",
+        subtitle=subtitle,
     )
 
 
@@ -335,17 +347,32 @@ def expense_full_report(
     count: int,
     by_cat: list[tuple[str, float]],
     detail_lines: list[str],
+    income: float = 0,
+    spend: float | None = None,
 ) -> dict:
-    """合計＋類別＋完整明細（多頁 carousel，避免被截斷）。"""
+    """合計＋類別＋完整明細（多頁 carousel，避免被截斷）。
+
+    沒有收入時，大數字仍是花費合計（含收回後的淨額）。
+    有收入時另列花費、收入、淨支出。
+    """
     bubbles: list[dict] = []
+    spend_amt = total if spend is None else spend
+    net = spend_amt - income
+    headline = net if income else spend_amt
 
     # 1) 總覽卡
     overview: list = [
-        _text(f"${total:,.0f}", size="3xl", weight="bold", color=C_ACCENT),
+        _text(f"${headline:,.0f}", size="3xl", weight="bold", color=C_ACCENT),
         _text(f"{label} · {count} 筆", size="sm", color=C_MUTED, margin="sm"),
+    ]
+    if income:
+        overview.append(_kv_row("花費", f"${spend_amt:,.0f}"))
+        overview.append(_kv_row("收入", f"${income:,.0f}", C_OK))
+        overview.append(_kv_row("淨支出", f"${net:,.0f}", C_ACCENT))
+    overview.extend([
         _sep("md"),
         _text("類別占比", size="xs", color=C_MUTED, margin="md"),
-    ]
+    ])
     if by_cat:
         for cat, amt in by_cat[:8]:
             pct = (amt / total * 100) if total else 0

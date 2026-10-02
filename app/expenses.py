@@ -110,6 +110,7 @@ def record_expense(
         category=cat,
         note=note or None,
         spent_at=when,
+        kind="expense",
     )
     session.add(item)
     session.flush()
@@ -153,6 +154,232 @@ def delete_expense_record(session: Session, user_id: str, expense_id: int) -> st
     return summary
 
 
+REFUND_WORDS = r"收回|退回|退我|還錢|還我|補回|轉回|匯回|找我|AA|分攤"
+INCOME_WORDS = r"收入|進帳|入帳|零用錢|紅包|薪水|薪資|獎金|收到錢"
+INCOME_CATEGORY = "收入"
+
+
+def looks_like_refund(text: str) -> bool:
+    """收回某一筆：要有收回類用詞，且有 #編號，或同時有日期與項目。"""
+    t = (text or "").strip()
+    if not t or not re.search(REFUND_WORDS, t, re.IGNORECASE):
+        return False
+    if re.search(r"[#＃]\s*\d+", t):
+        return True
+    has_date = bool(
+        re.search(
+            r"\d{1,2}[/-]\d{1,2}|\d{4}[-/]\d{1,2}[-/]\d{1,2}|今天|今日|昨天|昨日",
+            t,
+        )
+    )
+    stripped = re.sub(REFUND_WORDS, " ", t, flags=re.IGNORECASE)
+    stripped = re.sub(r"[#＃]\s*\d+|\d{1,7}(?:\.\d{1,2})?|(元|塊|今天|今日|昨天|昨日)", " ", stripped)
+    has_item = bool(re.search(r"[一-龥]{2,}", stripped))
+    return has_date and has_item
+
+
+def looks_like_income(text: str) -> bool:
+    """一般收入：不對到某一筆花費。有收回目標時不算收入。"""
+    t = (text or "").strip()
+    if not t or looks_like_refund(t):
+        return False
+    if not re.search(INCOME_WORDS, t):
+        return False
+    return _extract_money_amount(t) is not None
+
+
+def _extract_money_amount(text: str) -> Optional[float]:
+    """第一個金額。略過日期裡的數字，以及 #編號。"""
+    raw = text or ""
+    for m in re.finditer(r"(\d{1,7}(?:\.\d{1,2})?)", raw):
+        left = raw[m.start() - 1] if m.start() else ""
+        right = raw[m.end()] if m.end() < len(raw) else ""
+        if (left and left in "/-#＃") or (right and right in "/-"):
+            continue
+        prefix = raw[max(0, m.start() - 3) : m.start()]
+        if re.search(r"[#＃]\s*$", prefix):
+            continue
+        return float(m.group(1))
+    return None
+
+
+def _refund_item_hint(text: str) -> str:
+    t = re.sub(REFUND_WORDS, " ", text or "", flags=re.IGNORECASE)
+    t = re.sub(r"[#＃]\s*\d+", " ", t)
+    t = re.sub(r"\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[/-]\d{1,2}", " ", t)
+    t = re.sub(r"\d{1,7}(?:\.\d{1,2})?", " ", t)
+    t = re.sub(r"(元|塊|今天|今日|昨天|昨日|這筆|該筆|記帳|幫我)", " ", t)
+    t = re.sub(r"\s+", " ", t).strip(" ，,。")
+    return t
+
+
+def record_refund(session: Session, user_id: str, text: str) -> dict:
+    """另記一筆負數，扣在原支出的同一天、同一類別。不改原紀錄。"""
+    amount = _extract_money_amount(text)
+    if amount is None or amount <= 0:
+        return {"error": "請寫收回金額，例如：收回 #74 200。"}
+    target = _find_refund_target(session, user_id, text)
+    if isinstance(target, str):
+        return {"error": target}
+    already = _refunded_amount(session, user_id, target.id)
+    remaining = float(target.amount) - already
+    if amount > remaining + 1e-6:
+        return {
+            "error": f"#{target.id} 最多還能收回 ${remaining:,.0f}，這次 {amount:,.0f} 超過了。"
+        }
+    note = f"收回#{target.id} {target.note or ''}".strip()
+    item = Expense(
+        user_id=user_id,
+        amount=-float(amount),
+        category=target.category,
+        note=note[:255],
+        spent_at=target.spent_at,
+        kind="refund",
+        related_id=target.id,
+    )
+    session.add(item)
+    session.flush()
+    when = target.spent_at
+    weekday = "一二三四五六日"[when.weekday()] if when else "?"
+    when_label = when.strftime("%Y/%m/%d") + f"（週{weekday}）" if when else ""
+    message = (
+        f"已收回 #{item.id}\n"
+        f"對應：#{target.id} {target.note or ''}\n"
+        f"收回：${amount:,.0f}\n"
+        f"類別：{target.category}\n"
+        f"日期：{when_label}\n"
+        f"這筆剩餘：${remaining - amount:,.0f}"
+    )
+    return {
+        "id": item.id,
+        "amount": -float(amount),
+        "category": target.category,
+        "note": note,
+        "when_label": when_label,
+        "message": message,
+    }
+
+
+def record_income(session: Session, user_id: str, text: str) -> dict:
+    """不對到某一筆花費的收入，例如零用錢、薪水。"""
+    amount = _extract_money_amount(text)
+    if amount is None or amount <= 0:
+        return {"error": "請寫收入金額，例如：收入 200、零用錢 200。"}
+    note = _income_note(text)
+    spent_at = _income_spent_at(text)
+    item = Expense(
+        user_id=user_id,
+        amount=float(amount),
+        category=INCOME_CATEGORY,
+        note=note[:255],
+        spent_at=spent_at,
+        kind="income",
+        related_id=None,
+    )
+    session.add(item)
+    session.flush()
+    weekday = "一二三四五六日"[spent_at.weekday()]
+    when_label = f"{spent_at.strftime('%Y/%m/%d')}（週{weekday}）"
+    message = (
+        f"已記收入 #{item.id}\n"
+        f"金額：${amount:,.0f}\n"
+        f"項目：{note}\n"
+        f"時間：{when_label}"
+    )
+    return {
+        "id": item.id,
+        "amount": float(amount),
+        "category": INCOME_CATEGORY,
+        "note": note,
+        "when_label": when_label,
+        "message": message,
+    }
+
+
+def _is_income_row(row: Expense) -> bool:
+    return (getattr(row, "kind", None) or "") == "income" or row.category == INCOME_CATEGORY
+
+
+def _find_refund_target(session: Session, user_id: str, text: str) -> Expense | str:
+    m_id = re.search(r"[#＃]\s*(\d+)", text)
+    if m_id:
+        item = session.get(Expense, int(m_id.group(1)))
+        if not item or item.user_id != user_id:
+            return f"找不到記帳 #{m_id.group(1)}。"
+        if _is_income_row(item) or (getattr(item, "kind", None) or "expense") != "expense" or item.amount <= 0:
+            return f"#{item.id} 不是一筆花費，不能收回。"
+        return item
+
+    hint = _refund_item_hint(text)
+    spent = _income_spent_at(text)
+    start = spent.replace(hour=0, minute=0, second=0, microsecond=0)
+    end = start + timedelta(days=1)
+    rows = (
+        session.execute(
+            select(Expense)
+            .where(
+                Expense.user_id == user_id,
+                Expense.spent_at >= start,
+                Expense.spent_at < end,
+                Expense.amount > 0,
+            )
+            .order_by(Expense.id.asc())
+        )
+        .scalars()
+        .all()
+    )
+    rows = [r for r in rows if not _is_income_row(r) and (getattr(r, "kind", None) or "expense") == "expense"]
+    if hint:
+        rows = [r for r in rows if hint in (r.note or "")]
+    if not rows:
+        return "找不到要收回的那一筆。請改成「收回 #編號 金額」。"
+    if len(rows) > 1:
+        shown = "、".join(f"#{r.id} {r.note or ''} ${r.amount:,.0f}" for r in rows[:6])
+        return f"當天有多筆，請指定編號。例如：收回 #{rows[0].id} 。\n{shown}"
+    return rows[0]
+
+
+def _refunded_amount(session: Session, user_id: str, expense_id: int) -> float:
+    rows = (
+        session.execute(
+            select(Expense).where(
+                Expense.user_id == user_id,
+                Expense.related_id == expense_id,
+                Expense.kind == "refund",
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return float(sum(-r.amount for r in rows if r.amount < 0))
+
+
+def _income_note(text: str) -> str:
+    t = re.sub(INCOME_WORDS, " ", text or "")
+    t = re.sub(r"\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[/-]\d{1,2}", " ", t)
+    t = re.sub(r"\d{1,7}(?:\.\d{1,2})?", " ", t)
+    t = re.sub(r"(元|塊|今天|今日|昨天|昨日|幫我|記下|記錄|記帳)", " ", t)
+    t = re.sub(r"\s+", " ", t).strip(" ，,。")
+    if t:
+        return t
+    m = re.search(INCOME_WORDS, text or "")
+    return m.group(0) if m else "收入"
+
+
+def _income_spent_at(text: str) -> datetime:
+    raw = text or ""
+    if re.search(r"昨天|昨日", raw):
+        return (datetime.now() - timedelta(days=1)).replace(hour=12, minute=0, second=0, microsecond=0)
+    if re.search(r"今天|今日", raw):
+        return datetime.now().replace(hour=12, minute=0, second=0, microsecond=0)
+    m = re.search(r"(\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[/-]\d{1,2})", raw)
+    if m:
+        d = parse_user_date(m.group(1))
+        if d:
+            return d.replace(tzinfo=None, hour=12, minute=0, second=0, microsecond=0)
+    return datetime.now().replace(microsecond=0)
+
+
 def parse_expense_utterance(text: str) -> Optional[tuple[float, str, datetime]]:
     """解析單筆「今天早餐 100元」「8/5 晚餐 210元」→ (amount, note, spent_at)。"""
     items = parse_expense_utterances(text)
@@ -172,6 +399,8 @@ def _parse_one_expense_line(
     """解析單一記帳行（不含跨行）。"""
     raw = (line or "").strip()
     if not raw:
+        return None
+    if looks_like_refund(raw) or looks_like_income(raw):
         return None
     if re.search(r"(行程|行事曆|股價|漲幅|跌幅|盈虧|報酬率|安排)", raw):
         return None
@@ -373,8 +602,19 @@ def _format_expense_lines(rows: list[Expense]) -> list[str]:
         wd = _weekday_name(when) if when else "?"
         ts = when.strftime("%m/%d") if when else ""
         note = r.note or ""
-        lines.append(f"#{r.id} [{ts} 週{wd}] {r.category} ${r.amount:,.0f}  {note}")
+        amt = float(r.amount)
+        money = f"-${abs(amt):,.0f}" if amt < 0 else f"${amt:,.0f}"
+        lines.append(f"#{r.id} [{ts} 週{wd}] {r.category} {money}  {note}")
     return lines
+
+
+def _money_parts(rows: list[Expense]) -> tuple[list[Expense], list[Expense], float, float]:
+    """花費（含收回負數）與收入分開。沒有收入時，花費合計與舊版相同。"""
+    spend = [r for r in rows if not _is_income_row(r)]
+    income = [r for r in rows if _is_income_row(r)]
+    spend_total = float(sum(r.amount for r in spend))
+    income_total = float(sum(r.amount for r in income))
+    return spend, income, spend_total, income_total
 
 
 def _resolve_period(period: str) -> tuple[datetime, datetime, str]:
@@ -443,8 +683,11 @@ def list_expenses_on_date(session: Session, user_id: str, date_str: str) -> str:
     )
     if not rows:
         return f"📒 {label}\n這段期間沒有記帳紀錄。"
-    total = sum(r.amount for r in rows)
-    lines = [f"📒 {label} 共 {len(rows)} 筆，合計 ${total:,.0f}", "—" * 8]
+    _spend, _income, spend_total, income_total = _money_parts(rows)
+    lines = [f"📒 {label} 共 {len(rows)} 筆，花費 ${spend_total:,.0f}"]
+    if income_total:
+        lines.append(f"收入 ${income_total:,.0f}，淨支出 ${spend_total - income_total:,.0f}")
+    lines.append("—" * 8)
     lines.extend(_format_expense_lines(rows))
     return "\n".join(lines)
 
@@ -467,14 +710,19 @@ def summarize_expenses_period(session: Session, user_id: str, period: str = "mon
     if not rows:
         return f"📒 {label}\n這段期間沒有記帳紀錄。"
 
-    total = sum(r.amount for r in rows)
+    spend_rows, _income_rows, spend_total, income_total = _money_parts(rows)
     by_cat: dict[str, float] = defaultdict(float)
-    for r in rows:
+    for r in spend_rows:
         by_cat[r.category] += r.amount
+    by_cat = {k: v for k, v in by_cat.items() if v > 0}
 
-    lines = [f"📒 {label} 花費統計", f"合計：${total:,.0f}（{len(rows)} 筆）", "—" * 8, "【類別】"]
+    lines = [f"📒 {label} 花費統計", f"合計：${spend_total:,.0f}（{len(rows)} 筆）", "—" * 8, "【類別】"]
+    if income_total:
+        lines.insert(2, f"收入：${income_total:,.0f}")
+        lines.insert(3, f"淨支出：${spend_total - income_total:,.0f}")
+    base = spend_total if spend_total else 1
     for cat, amt in sorted(by_cat.items(), key=lambda x: -x[1]):
-        lines.append(f"・{cat}：${amt:,.0f}（{amt / total * 100:.1f}%）")
+        lines.append(f"・{cat}：${amt:,.0f}（{amt / base * 100:.1f}%）")
     lines.append("—" * 8)
     lines.append("【細項】")
     lines.extend(_format_expense_lines(rows[:50]))
@@ -498,15 +746,18 @@ def category_breakdown(
         .scalars()
         .all()
     )
+    spend_rows, _income_rows, spend_total, _income_total = _money_parts(rows)
     by_cat: dict[str, float] = defaultdict(float)
-    for r in rows:
+    for r in spend_rows:
         by_cat[r.category] += r.amount
-    total = sum(by_cat.values())
+    by_cat = {k: v for k, v in by_cat.items() if v > 0}
+    total = spend_total
     if not by_cat:
         return f"📒 {label} 沒有記帳資料，無法產生圓餅圖。", {}, label
+    base = total if total > 0 else sum(by_cat.values())
     lines = [f"📒 {label} 消費類別占比（合計 ${total:,.0f}）"]
     for cat, amt in sorted(by_cat.items(), key=lambda x: -x[1]):
-        lines.append(f"・{cat}：${amt:,.0f}（{amt / total * 100:.1f}%）")
+        lines.append(f"・{cat}：${amt:,.0f}（{amt / base * 100:.1f}%）")
     return "\n".join(lines), dict(by_cat), label
 
 
@@ -653,21 +904,26 @@ def build_expense_full_report(
             "chart_path": None,
         }
 
-    total = float(sum(r.amount for r in rows))
+    _spend_rows, _income_rows, spend_total, income_total = _money_parts(rows)
     by_cat_map: dict[str, float] = defaultdict(float)
-    for r in rows:
+    for r in _spend_rows:
         by_cat_map[r.category] += r.amount
-    by_cat = sorted(by_cat_map.items(), key=lambda x: -x[1])
+    by_cat = sorted(((k, v) for k, v in by_cat_map.items() if v > 0), key=lambda x: -x[1])
     detail_lines = _format_expense_lines(rows)
+    total = spend_total
+    net = spend_total - income_total
 
     text_lines = [
         f"📒 {label} 花費報告",
-        f"合計：${total:,.0f}（{len(rows)} 筆）",
-        "—" * 8,
-        "【類別】",
+        f"合計：${spend_total:,.0f}（{len(rows)} 筆）",
     ]
+    if income_total:
+        text_lines.append(f"收入：${income_total:,.0f}")
+        text_lines.append(f"淨支出：${net:,.0f}")
+    text_lines.extend(["—" * 8, "【類別】"])
+    base = spend_total if spend_total else 1
     for cat, amt in by_cat:
-        text_lines.append(f"・{cat}：${amt:,.0f}（{amt / total * 100:.1f}%）")
+        text_lines.append(f"・{cat}：${amt:,.0f}（{amt / base * 100:.1f}%）")
     text_lines.append("—" * 8)
     text_lines.append("【細項】")
     text_lines.extend(detail_lines)
@@ -680,6 +936,9 @@ def build_expense_full_report(
         "empty": False,
         "label": label,
         "total": total,
+        "spend": spend_total,
+        "income": income_total,
+        "net": net,
         "count": len(rows),
         "by_cat": by_cat,
         "detail_lines": detail_lines,

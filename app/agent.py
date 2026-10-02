@@ -21,6 +21,8 @@ from .db import session_scope
 from .expenses import (
     build_expense_full_report,
     delete_expense_record,
+    record_income,
+    record_refund,
     extract_period_hint,
     get_pending_images,
     parse_expense_utterances,
@@ -134,8 +136,12 @@ def _expense_full_reply(user_id: str, period: str) -> AgentReply:
         count=report["count"],
         by_cat=report["by_cat"],
         detail_lines=report["detail_lines"],
+        income=float(report.get("income") or 0),
+        spend=float(report.get("spend") if report.get("spend") is not None else report["total"]),
     )
-    alt = f"{report['label']} 合計 ${report['total']:,.0f}（{report['count']} 筆）"
+    income = float(report.get("income") or 0)
+    headline = float(report.get("net") if income else report["total"])
+    alt = f"{report['label']} 合計 ${headline:,.0f}（{report['count']} 筆）"
     return _reply(alt, flex, images=_images_from_pending(), title="花費報告")
 
 
@@ -152,6 +158,40 @@ def _a_expenses(user_id: str, text: str, intent: Intent) -> AgentReply | None:
         with session_scope() as session:
             msg = delete_expense_record(session, user_id, int(m_del.group(1)))
         return _reply(msg, title="記帳")
+
+    if intent == Intent.EXPENSE_REFUND:
+        with session_scope() as session:
+            data = record_refund(session, user_id, t)
+        if data.get("error"):
+            return _reply(data["error"], title="收回")
+        return _reply(
+            data["message"],
+            flex_ui.expense_added(
+                expense_id=data["id"],
+                amount=data["amount"],
+                category=data["category"],
+                note=data["note"],
+                when_label=data["when_label"],
+            ),
+            title="收回",
+        )
+
+    if intent == Intent.EXPENSE_INCOME:
+        with session_scope() as session:
+            data = record_income(session, user_id, t)
+        if data.get("error"):
+            return _reply(data["error"], title="收入")
+        return _reply(
+            data["message"],
+            flex_ui.expense_added(
+                expense_id=data["id"],
+                amount=data["amount"],
+                category=data["category"],
+                note=data["note"],
+                when_label=data["when_label"],
+            ),
+            title="收入",
+        )
 
     if intent in {Intent.EXPENSE_CHART, Intent.EXPENSE_QUERY}:
         period = extract_period_hint(
@@ -436,6 +476,8 @@ def try_route_a(user_id: str, text: str) -> AgentReply | None:
         Intent.EXPENSE_CHART,
         Intent.EXPENSE_QUERY,
         Intent.EXPENSE_WRITE,
+        Intent.EXPENSE_REFUND,
+        Intent.EXPENSE_INCOME,
     }:
         reply = _a_expenses(user_id, t, intent)
         if reply is not None:

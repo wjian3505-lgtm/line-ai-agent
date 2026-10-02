@@ -10,6 +10,8 @@ from __future__ import annotations
 import re
 from enum import Enum
 
+from .expenses import looks_like_income, looks_like_refund
+
 
 class Intent(str, Enum):
     STOCK_BUY = "stock_buy"
@@ -17,6 +19,8 @@ class Intent(str, Enum):
     EXPENSE_CHART = "expense_chart"
     EXPENSE_QUERY = "expense_query"
     EXPENSE_WRITE = "expense_write"
+    EXPENSE_REFUND = "expense_refund"
+    EXPENSE_INCOME = "expense_income"
     CALENDAR_DELETE = "calendar_delete"
     CALENDAR_ADD = "calendar_add"  # 交 B
     CALENDAR_LIST = "calendar_list"
@@ -258,6 +262,12 @@ def classify_intent(text: str) -> Intent:
             pass
         else:
             return Intent.EXPENSE_DELETE
+
+    # 2.5) 收回某一筆／一般收入（先於記帳寫入，避免被記成正數花費）
+    if looks_like_refund(t):
+        return Intent.EXPENSE_REFUND
+    if looks_like_income(t):
+        return Intent.EXPENSE_INCOME
 
     # 3) 行程刪除
     if re.search(r"(移除|刪除|刪掉|刪去|取消)", t) and re.search(
