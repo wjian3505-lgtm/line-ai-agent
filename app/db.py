@@ -18,8 +18,19 @@ class Base(DeclarativeBase):
     pass
 
 
+def _normalize_database_url(url: str) -> str:
+    """雲端常給 postgresql://，新版 SQLAlchemy 會去載 psycopg v3。改走已安裝的 psycopg2。"""
+    if url.startswith("postgres://"):
+        return "postgresql+psycopg2://" + url[len("postgres://") :]
+    if url.startswith("postgresql+psycopg://"):
+        return "postgresql+psycopg2://" + url[len("postgresql+psycopg://") :]
+    if url.startswith("postgresql://"):
+        return "postgresql+psycopg2://" + url[len("postgresql://") :]
+    return url
+
+
 def _make_engine():
-    url = settings.database_url
+    url = _normalize_database_url(settings.database_url)
     connect_args = {}
     if url.startswith("sqlite"):
         # 確保 SQLite 檔案所在資料夾存在
