@@ -102,9 +102,63 @@ def looks_like_calendar_add(text: str) -> bool:
     return bool(has_date and has_time and len(t) >= 8)
 
 
+def looks_like_expense_period_query(text: str) -> bool:
+    """月份／日期查帳，不是記一筆。
+
+    「10月」「10月消費」「上個月花費」「4號」這類句子裡的數字是時間。
+    「10月晚餐 300」「今天早餐 100元」仍有另一個金額，不當查詢。
+    """
+    t = (text or "").strip()
+    if not t:
+        return False
+    if re.search(r"(行程|安排|行事曆|日程|有什麼|有哪些|有事嗎|股價|漲幅|跌幅|持股)", t):
+        return False
+    has_period = bool(
+        re.search(
+            r"(\d{1,2}\s*月(份)?|"
+            r"(十[一二]|[一二三四五六七八九十兩])\s*月(份)?|"
+            r"本月|這個月|當月|上個月|上月|下個月|下月|"
+            r"今天|今日|昨天|昨日|前天|"
+            r"今年|去年|明年|本年|"
+            r"\d{4}\s*年|"
+            r"\d{1,2}[/-]\d{1,2}|"
+            r"\d{4}[-/]\d{1,2}[-/]\d{1,2}|"
+            r"\d{1,2}\s*[號日]|"
+            r"全部|總共|至今)",
+            t,
+        )
+    )
+    if not has_period:
+        return False
+    stripped = t
+    stripped = re.sub(r"\d{4}\s*年", " ", stripped)
+    stripped = re.sub(r"\d{1,2}\s*月\s*\d{1,2}\s*[日號]?", " ", stripped)
+    stripped = re.sub(r"\d{1,2}\s*月(份)?", " ", stripped)
+    stripped = re.sub(r"(十[一二]|[一二三四五六七八九十兩])\s*月(份)?", " ", stripped)
+    stripped = re.sub(r"\d{4}[-/]\d{1,2}[-/]\d{1,2}", " ", stripped)
+    stripped = re.sub(r"\d{1,2}[/-]\d{1,2}", " ", stripped)
+    stripped = re.sub(r"\d{1,2}\s*[號日]", " ", stripped)
+    if re.search(r"\d", stripped):
+        return False
+    rest = re.sub(
+        r"(花費|支出|消費|花了|花多少|多少錢|總花費|總支出|總消費|總共|合計|總額|統計|"
+        r"明細|細項|清單|紀錄|記錄|記帳|帳|"
+        r"收入|進帳|入帳|零用錢|薪水|薪資|"
+        r"本月|這個月|當月|上個月|上月|下個月|下月|今天|今日|昨天|昨日|前天|"
+        r"今年|去年|明年|本年|全部|至今|"
+        r"查|看|幫我|一下|的|呢|嗎|請|我|想|要|知道|多少|幾|份)",
+        " ",
+        stripped,
+    )
+    rest = re.sub(r"[\s，,。．.！!？?、/~～\-]+", "", rest)
+    return not rest
+
+
 def looks_like_expense_write(text: str) -> bool:
     t = (text or "").strip()
     if not t or looks_like_stock_buy(t):
+        return False
+    if looks_like_expense_period_query(t):
         return False
     if re.search(r"(漲幅|跌幅|盈虧|報酬率|行事曆|股價)", t):
         return False
@@ -275,7 +329,12 @@ def classify_intent(text: str) -> Intent:
     ):
         return Intent.CALENDAR_DELETE
 
-    # 4) 記帳圖／統計／明細（含「今日總花費」）
+    # 4) 記帳圖／統計／明細（含「10月」「10月消費」，數字是月份不是金額）
+    if looks_like_expense_period_query(t) and re.search(r"(圓餅圖|類別(統計)?圖|消費類別|類別占比|類別統計)", t):
+        return Intent.EXPENSE_CHART
+    if looks_like_expense_period_query(t):
+        return Intent.EXPENSE_QUERY
+
     if re.search(r"(圓餅圖|類別(統計)?圖|消費類別|類別占比|類別統計)", t):
         return Intent.EXPENSE_CHART
 

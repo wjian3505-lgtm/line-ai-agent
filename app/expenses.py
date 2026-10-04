@@ -194,7 +194,7 @@ def _extract_money_amount(text: str) -> Optional[float]:
     for m in re.finditer(r"(\d{1,7}(?:\.\d{1,2})?)", raw):
         left = raw[m.start() - 1] if m.start() else ""
         right = raw[m.end()] if m.end() < len(raw) else ""
-        if (left and left in "/-#＃") or (right and right in "/-"):
+        if (left and left in "/-#＃") or (right and right in "/-月年號日"):
             continue
         prefix = raw[max(0, m.start() - 3) : m.start()]
         if re.search(r"[#＃]\s*$", prefix):
@@ -447,7 +447,7 @@ def _parse_one_expense_line(
         for m in re.finditer(r"(\d{1,7}(?:\.\d{1,2})?)", work):
             left = work[m.start() - 1] if m.start() > 0 else ""
             right = work[m.end()] if m.end() < len(work) else ""
-            if left in ("/", "-") or right in ("/", "-"):
+            if left in ("/", "-") or right in ("/", "-", "月", "年", "號", "日"):
                 continue
             m_amt = m
             break
@@ -573,14 +573,32 @@ def extract_period_hint(text: str, default: str = "month") -> str:
     if not t:
         return default
 
+    m = re.search(r"(\d{4})\s*年\s*(\d{1,2})\s*月", t)
+    if m:
+        return f"{m.group(1)}-{int(m.group(2))}"
+    m = re.search(r"(今年|去年|明年|本年)\s*(\d{1,2})\s*月", t)
+    if m:
+        return m.group(0).replace(" ", "")
+    m_md = re.search(r"(\d{1,2})\s*月\s*(\d{1,2})\s*[日號]", t)
+    if m_md:
+        return f"{int(m_md.group(1))}/{int(m_md.group(2))}"
+    m_day = re.search(r"(?<!\d)(\d{1,2})\s*[日號]", t)
+    if m_day and not re.search(r"\d{1,2}\s*月", t):
+        return f"{datetime.now().month}/{int(m_day.group(1))}"
+
     checks = (
         (r"今天|今日|本日|每天", "今天"),
         (r"昨天|昨日", "昨天"),
+        (r"前天", "前天"),
         (r"總共|全部|累計|總計|至今", "總共"),
-        (r"今年|本年|當年|每年", "今年"),
+        (r"上個月|上月", "上個月"),
+        (r"下個月|下月", "下個月"),
         (r"本月|這個月|當月|每月", "本月"),
         (r"\d{1,2}[/-]\d{1,2}|\d{4}[-/]\d{1,2}[-/]\d{1,2}", None),  # group 0
         (r"\d{1,2}\s*月|[一二三四五六七八九十兩]{1,3}\s*月", None),
+        (r"去年", "去年"),
+        (r"明年", "明年"),
+        (r"今年|本年|當年|每年", "今年"),
         (r"\d{4}\s*年?|\d{4}", None),
     )
     for pattern, fixed in checks:
@@ -629,8 +647,25 @@ def _resolve_period(period: str) -> tuple[datetime, datetime, str]:
         start = (now - timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
         return start, start + timedelta(days=1), f"昨天 {start.strftime('%Y/%m/%d')}（週{_weekday_name(start)}）"
 
-    if p in ("total", "全部", "總共", "累計", "所有", "總計"):
+    if p == "前天":
+        start = (now - timedelta(days=2)).replace(hour=0, minute=0, second=0, microsecond=0)
+        return start, start + timedelta(days=1), f"前天 {start.strftime('%Y/%m/%d')}（週{_weekday_name(start)}）"
+
+    if p in ("total", "全部", "總共", "累計", "所有", "總計", "至今"):
         return datetime(1970, 1, 1), datetime(2100, 1, 1), "全部期間"
+
+    m_rel = re.fullmatch(r"(今年|去年|明年|本年)(\d{1,2})月", p)
+    if m_rel:
+        year = now.year
+        if m_rel.group(1) == "去年":
+            year -= 1
+        elif m_rel.group(1) == "明年":
+            year += 1
+        month = int(m_rel.group(2))
+        if 1 <= month <= 12:
+            start = datetime(year, month, 1)
+            last = calendar.monthrange(year, month)[1]
+            return start, datetime(year, month, last) + timedelta(days=1), f"{year}/{month:02d}"
 
     m = parse_user_month(p)
     if m and (
@@ -652,8 +687,9 @@ def _resolve_period(period: str) -> tuple[datetime, datetime, str]:
     if y and (p in ("year", "今年", "本年", "當年", "每年") or re.search(r"年", p) or re.fullmatch(r"\d{4}", p)):
         return datetime(y, 1, 1), datetime(y + 1, 1, 1), f"{y} 年"
 
-    if p in ("year", "今年", "本年", "當年", "每年"):
-        return datetime(now.year, 1, 1), datetime(now.year + 1, 1, 1), f"{now.year} 年"
+    if p in ("year", "今年", "本年", "當年", "每年", "去年", "明年"):
+        year = parse_user_year(p) or now.year
+        return datetime(year, 1, 1), datetime(year + 1, 1, 1), f"{year} 年"
 
     d = parse_user_date(p)
     if d:
