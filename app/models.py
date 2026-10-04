@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, Integer, String, Text, func
+from sqlalchemy import DateTime, Float, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -16,6 +16,7 @@ class Schedule(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(String(64), index=True)
+    seq: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 此帳號自己的編號
     title: Mapped[str] = mapped_column(String(255))
     start_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     location: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -31,6 +32,7 @@ class Expense(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(String(64), index=True)
+    seq: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 此帳號自己的編號
     amount: Mapped[float] = mapped_column(Float)
     category: Mapped[str] = mapped_column(String(64), default="其他")
     note: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -47,6 +49,7 @@ class Note(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(String(64), index=True)
+    seq: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 此帳號自己的編號
     content: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
@@ -71,6 +74,7 @@ class Holding(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(String(64), index=True)
+    seq: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 此帳號自己的編號
     symbol: Mapped[str] = mapped_column(String(16), index=True)
     name: Mapped[str | None] = mapped_column(String(64), nullable=True)
     buy_price: Mapped[float] = mapped_column(Float)
@@ -88,6 +92,7 @@ class StockSale(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[str] = mapped_column(String(64), index=True)
+    seq: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 此帳號自己的編號
     symbol: Mapped[str] = mapped_column(String(16), index=True)
     name: Mapped[str | None] = mapped_column(String(64), nullable=True)
     sell_price: Mapped[float] = mapped_column(Float)
@@ -96,6 +101,18 @@ class StockSale(Base):
     realized_pnl: Mapped[float] = mapped_column(Float, default=0)
     note: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class UserSeqCounter(Base):
+    """每個帳號、每種紀錄的最後編號。只往上加，刪除不會把號碼還回去。"""
+
+    __tablename__ = "user_seq_counters"
+    __table_args__ = (UniqueConstraint("user_id", "bucket", name="uq_user_seq_counter"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    bucket: Mapped[str] = mapped_column(String(32))
+    last_seq: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class StockSaleLot(Base):

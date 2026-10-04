@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .models import Note, Schedule
+from .user_seq import find_by_seq, next_seq, show_no
 from .expenses import (
     add_expense_record,
     delete_expense_record,
@@ -73,6 +74,7 @@ def build_tools(session: Session, user_id: str) -> list[Callable]:
         """
         item = Schedule(
             user_id=user_id,
+            seq=next_seq(session, Schedule, user_id),
             title=title,
             start_at=_parse_dt(start_at),
             location=location or None,
@@ -81,7 +83,7 @@ def build_tools(session: Session, user_id: str) -> list[Callable]:
         session.add(item)
         session.flush()
         when = item.start_at.strftime("%Y-%m-%d %H:%M") if item.start_at else "未指定時間"
-        return f"已新增行程 #{item.id}：{title}（{when}）"
+        return f"已新增行程 #{show_no(item)}：{title}（{when}）"
 
     def list_schedules(keyword: str = "", days_ahead: int = 30, include_done: bool = False) -> str:
         """查詢行程。可用關鍵字或未來天數範圍過濾。
@@ -109,7 +111,7 @@ def build_tools(session: Session, user_id: str) -> list[Callable]:
         for r in rows:
             when = r.start_at.strftime("%m/%d %H:%M") if r.start_at else "未定時間"
             loc = f" @ {r.location}" if r.location else ""
-            lines.append(f"#{r.id} [{when}] {r.title}{loc}")
+            lines.append(f"#{show_no(r)} [{when}] {r.title}{loc}")
         return "\n".join(lines)
 
     def complete_schedule(schedule_id: int) -> str:
@@ -118,11 +120,11 @@ def build_tools(session: Session, user_id: str) -> list[Callable]:
         Args:
             schedule_id: 行程編號（list_schedules 顯示的 #id）。
         """
-        item = session.get(Schedule, schedule_id)
-        if not item or item.user_id != user_id:
+        item = find_by_seq(session, Schedule, user_id, schedule_id)
+        if not item:
             return f"找不到編號 #{schedule_id} 的行程。"
         item.done = 1
-        return f"已完成行程 #{schedule_id}：{item.title}"
+        return f"已完成行程 #{show_no(item)}：{item.title}"
 
     # ---------- 記帳 ----------
     def add_expense(amount: float, note: str = "", category: str = "", spent_at: str = "") -> str:
@@ -199,10 +201,10 @@ def build_tools(session: Session, user_id: str) -> list[Callable]:
         Args:
             content: 要記錄的內容。
         """
-        item = Note(user_id=user_id, content=content)
+        item = Note(user_id=user_id, seq=next_seq(session, Note, user_id), content=content)
         session.add(item)
         session.flush()
-        return f"已記下筆記 #{item.id}。"
+        return f"已記下筆記 #{show_no(item)}。"
 
     def search_notes(keyword: str = "", limit: int = 10) -> str:
         """搜尋 / 列出筆記。
@@ -221,7 +223,7 @@ def build_tools(session: Session, user_id: str) -> list[Callable]:
         lines = ["你的筆記："]
         for r in rows:
             ts = r.created_at.strftime("%m/%d") if r.created_at else ""
-            lines.append(f"#{r.id} [{ts}] {r.content}")
+            lines.append(f"#{show_no(r)} [{ts}] {r.content}")
         return "\n".join(lines)
 
     # ---------- 股市 ----------

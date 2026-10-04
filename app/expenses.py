@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from .calendar_google import parse_user_date, parse_user_month, parse_user_year
 from .config import settings
 from .models import Expense
+from .user_seq import find_by_seq, next_seq, show_no
 
 CATEGORIES = ("伙食", "購物", "交通", "娛樂", "投資", "其他")
 _pending_images: ContextVar[list] = ContextVar("expense_pending_images", default=None)
@@ -106,6 +107,7 @@ def record_expense(
     when = spent_at or datetime.now()
     item = Expense(
         user_id=user_id,
+        seq=next_seq(session, Expense, user_id),
         amount=float(amount),
         category=cat,
         note=note or None,
@@ -117,14 +119,14 @@ def record_expense(
     weekday = "一二三四五六日"[when.weekday()]
     when_label = f"{when.strftime('%Y/%m/%d')}（週{weekday}）"
     message = (
-        f"已記帳 #{item.id}\n"
+        f"已記帳 #{show_no(item)}\n"
         f"金額：${amount:,.0f}\n"
         f"類別：{cat}\n"
         f"項目：{note or '（無備註）'}\n"
         f"時間：{when_label}"
     )
     return {
-        "id": item.id,
+        "id": show_no(item),
         "amount": float(amount),
         "category": cat,
         "note": note or "（無備註）",
@@ -135,15 +137,15 @@ def record_expense(
 
 def delete_expense_record(session: Session, user_id: str, expense_id: int) -> str:
     """依編號刪除一筆記帳（只能刪自己的）。"""
-    item = session.get(Expense, expense_id)
-    if not item or item.user_id != user_id:
+    item = find_by_seq(session, Expense, user_id, expense_id)
+    if not item:
         return f"找不到記帳編號 #{expense_id}，請先查「今天花了多少」確認編號。"
     when = item.spent_at or item.created_at
     wd = _weekday_name(when) if when else "?"
     ts = when.strftime("%Y/%m/%d") if when else ""
     note = item.note or "（無備註）"
     summary = (
-        f"🗑 已刪除記帳 #{item.id}\n"
+        f"🗑 已刪除記帳 #{show_no(item)}\n"
         f"金額：${item.amount:,.0f}\n"
         f"類別：{item.category}\n"
         f"項目：{note}\n"
@@ -225,11 +227,12 @@ def record_refund(session: Session, user_id: str, text: str) -> dict:
     remaining = float(target.amount) - already
     if amount > remaining + 1e-6:
         return {
-            "error": f"#{target.id} 最多還能收回 ${remaining:,.0f}，這次 {amount:,.0f} 超過了。"
+            "error": f"#{show_no(target)} 最多還能收回 ${remaining:,.0f}，這次 {amount:,.0f} 超過了。"
         }
-    note = f"收回#{target.id} {target.note or ''}".strip()
+    note = f"收回#{show_no(target)} {target.note or ''}".strip()
     item = Expense(
         user_id=user_id,
+        seq=next_seq(session, Expense, user_id),
         amount=-float(amount),
         category=target.category,
         note=note[:255],
@@ -243,15 +246,15 @@ def record_refund(session: Session, user_id: str, text: str) -> dict:
     weekday = "一二三四五六日"[when.weekday()] if when else "?"
     when_label = when.strftime("%Y/%m/%d") + f"（週{weekday}）" if when else ""
     message = (
-        f"已收回 #{item.id}\n"
-        f"對應：#{target.id} {target.note or ''}\n"
+        f"已收回 #{show_no(item)}\n"
+        f"對應：#{show_no(target)} {target.note or ''}\n"
         f"收回：${amount:,.0f}\n"
         f"類別：{target.category}\n"
         f"日期：{when_label}\n"
         f"這筆剩餘：${remaining - amount:,.0f}"
     )
     return {
-        "id": item.id,
+        "id": show_no(item),
         "amount": -float(amount),
         "category": target.category,
         "note": note,
@@ -269,6 +272,7 @@ def record_income(session: Session, user_id: str, text: str) -> dict:
     spent_at = _income_spent_at(text)
     item = Expense(
         user_id=user_id,
+        seq=next_seq(session, Expense, user_id),
         amount=float(amount),
         category=INCOME_CATEGORY,
         note=note[:255],
@@ -281,13 +285,13 @@ def record_income(session: Session, user_id: str, text: str) -> dict:
     weekday = "一二三四五六日"[spent_at.weekday()]
     when_label = f"{spent_at.strftime('%Y/%m/%d')}（週{weekday}）"
     message = (
-        f"已記收入 #{item.id}\n"
+        f"已記收入 #{show_no(item)}\n"
         f"金額：${amount:,.0f}\n"
         f"項目：{note}\n"
         f"時間：{when_label}"
     )
     return {
-        "id": item.id,
+        "id": show_no(item),
         "amount": float(amount),
         "category": INCOME_CATEGORY,
         "note": note,
@@ -303,11 +307,11 @@ def _is_income_row(row: Expense) -> bool:
 def _find_refund_target(session: Session, user_id: str, text: str) -> Expense | str:
     m_id = re.search(r"[#＃]\s*(\d+)", text)
     if m_id:
-        item = session.get(Expense, int(m_id.group(1)))
-        if not item or item.user_id != user_id:
+        item = find_by_seq(session, Expense, user_id, int(m_id.group(1)))
+        if not item:
             return f"找不到記帳 #{m_id.group(1)}。"
         if _is_income_row(item) or (getattr(item, "kind", None) or "expense") != "expense" or item.amount <= 0:
-            return f"#{item.id} 不是一筆花費，不能收回。"
+            return f"#{show_no(item)} 不是一筆花費，不能收回。"
         return item
 
     hint = _refund_item_hint(text)
@@ -334,8 +338,8 @@ def _find_refund_target(session: Session, user_id: str, text: str) -> Expense | 
     if not rows:
         return "找不到要收回的那一筆。請改成「收回 #編號 金額」。"
     if len(rows) > 1:
-        shown = "、".join(f"#{r.id} {r.note or ''} ${r.amount:,.0f}" for r in rows[:6])
-        return f"當天有多筆，請指定編號。例如：收回 #{rows[0].id} 。\n{shown}"
+        shown = "、".join(f"#{show_no(r)} {r.note or ''} ${r.amount:,.0f}" for r in rows[:6])
+        return f"當天有多筆，請指定編號。例如：收回 #{show_no(rows[0])} 。\n{shown}"
     return rows[0]
 
 
@@ -622,7 +626,7 @@ def _format_expense_lines(rows: list[Expense]) -> list[str]:
         note = r.note or ""
         amt = float(r.amount)
         money = f"-${abs(amt):,.0f}" if amt < 0 else f"${amt:,.0f}"
-        lines.append(f"#{r.id} [{ts} 週{wd}] {r.category} {money}  {note}")
+        lines.append(f"#{show_no(r)} [{ts} 週{wd}] {r.category} {money}  {note}")
     return lines
 
 

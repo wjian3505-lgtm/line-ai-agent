@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from .models import Holding, StockQueryLog, StockSale, StockSaleLot
 from .stock import get_stock_quote, resolve_symbol
+from .user_seq import find_by_seq, next_seq, show_no
 
 
 def log_stock_query(
@@ -171,6 +172,7 @@ def record_holding(
     name = quote.get("name") or matched or resolved
     item = Holding(
         user_id=user_id,
+        seq=next_seq(session, Holding, user_id),
         symbol=resolved,
         name=name,
         buy_price=buy_price,
@@ -184,12 +186,12 @@ def record_holding(
     cost = buy_price * quantity
     lots = quantity / 1000
     message = (
-        f"已記錄持股 #{item.id}：{resolved} {name}\n"
+        f"已記錄持股 #{show_no(item)}：{resolved} {name}\n"
         f"買入 {buy_price} × {quantity:.0f} 股（約 {lots:g} 張）\n"
         f"成本約 ${cost:,.0f}"
     )
     return {
-        "id": item.id,
+        "id": show_no(item),
         "symbol": resolved,
         "name": name,
         "buy_price": buy_price,
@@ -201,13 +203,13 @@ def record_holding(
 
 
 def close_holding(session: Session, user_id: str, holding_id: int) -> str:
-    item = session.get(Holding, holding_id)
-    if not item or item.user_id != user_id:
+    item = find_by_seq(session, Holding, user_id, holding_id)
+    if not item:
         return f"找不到持股 #{holding_id}。"
     if item.closed:
-        return f"持股 #{holding_id} 已結清過了。"
+        return f"持股 #{show_no(item)} 已結清過了。"
     item.closed = 1
-    return f"已結清持股 #{holding_id}：{item.symbol} {item.name or ''}".strip()
+    return f"已結清持股 #{show_no(item)}：{item.symbol} {item.name or ''}".strip()
 
 
 def portfolio_summary(session: Session, user_id: str) -> str:
@@ -259,7 +261,7 @@ def portfolio_summary_data(session: Session, user_id: str) -> dict:
         if q.get("error") or q.get("price") is None:
             rows.append(
                 {
-                    "id": r.id,
+                    "id": show_no(r),
                     "symbol": r.symbol,
                     "name": r.name or "",
                     "error": True,
@@ -275,7 +277,7 @@ def portfolio_summary_data(session: Session, user_id: str) -> dict:
         total_value += value
         rows.append(
             {
-                "id": r.id,
+                "id": show_no(r),
                 "symbol": r.symbol,
                 "name": q.get("name") or r.name or "",
                 "buy": r.buy_price,
@@ -475,6 +477,7 @@ def record_stock_sale(
     realized = float(user_pnl) if user_pnl is not None else calculated
     sale = StockSale(
         user_id=user_id,
+        seq=next_seq(session, StockSale, user_id),
         symbol=resolved,
         name=name,
         sell_price=float(sell_price),
@@ -505,13 +508,13 @@ def record_stock_sale(
     when_label = f"{sold_at.strftime('%Y/%m/%d')}（週{weekday}）"
     pnl_label = "你填的淨損益" if user_pnl is not None else "淨損益"
     message = (
-        f"已賣出 #{sale.id}：{resolved} {name}\n"
+        f"已賣出 #{show_no(sale)}：{resolved} {name}\n"
         f"賣價 {sell_price:g} × {qty:.0f} 股（約 {lots_n:g} 張）\n"
         f"{pnl_label} ${realized:,.0f}\n"
         f"日期：{when_label}"
     )
     return {
-        "id": sale.id,
+        "id": show_no(sale),
         "symbol": resolved,
         "name": name,
         "sell_price": float(sell_price),
@@ -565,7 +568,7 @@ def query_stock_trades(session: Session, user_id: str, text: str) -> dict:
         events.append(
             (
                 when,
-                f"買 #{r.id} [{when.strftime('%m/%d')}] {r.symbol} {r.name or ''}  "
+                f"買 #{show_no(r)} [{when.strftime('%m/%d')}] {r.symbol} {r.name or ''}  "
                 f"{r.buy_price:g} × {r.quantity:.0f}股",
             )
         )
@@ -576,7 +579,7 @@ def query_stock_trades(session: Session, user_id: str, text: str) -> dict:
         events.append(
             (
                 when,
-                f"賣 #{r.id} [{when.strftime('%m/%d')}] {r.symbol} {r.name or ''}  "
+                f"賣 #{show_no(r)} [{when.strftime('%m/%d')}] {r.symbol} {r.name or ''}  "
                 f"{r.sell_price:g} × {r.quantity:.0f}股  淨損益 ${r.realized_pnl:,.0f}",
             )
         )

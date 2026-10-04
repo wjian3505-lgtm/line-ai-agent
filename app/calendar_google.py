@@ -979,8 +979,11 @@ def _backup_local_schedule(
     """Google 寫入成功後，同步備份到本機 schedules。"""
     from .models import Schedule
 
+    from .user_seq import next_seq
+
     item = Schedule(
         user_id=user_id,
+        seq=next_seq(session, Schedule, user_id),
         title=title,
         start_at=start_dt.replace(tzinfo=None) if start_dt and start_dt.tzinfo else start_dt,
         location=location or None,
