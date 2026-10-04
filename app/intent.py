@@ -134,6 +134,23 @@ def looks_like_calendar_add(text: str) -> bool:
     return bool(has_date and has_time and len(t) >= 8)
 
 
+def _looks_like_time_range(text: str) -> bool:
+    """8-9月、8月到9月、8/1到9/30、近三個月、上半年、Q3。"""
+    return bool(
+        re.search(
+            r"(\d{1,2}\s*月(?:份)?\s*[-~～到至]\s*\d{1,2}\s*月|"
+            r"\d{1,2}\s*[-~～到至]\s*\d{1,2}\s*月|"
+            r"[一二三四五六七八九十兩]+\s*月?(?:份)?\s*[-~～到至]\s*[一二三四五六七八九十兩]+\s*月|"
+            r"\d{1,2}[/-]\d{1,2}\s*[-~～到至]\s*\d{1,2}[/-]\d{1,2}|"
+            r"從\s*.{0,10}(月|日).{0,6}(到|至|~|～)|"
+            r"上半年|下半年|第[一二三四1-4]季|Q[1-4]|"
+            r"(近|最近|過去|這)\s*[兩三四五六七八九十\d]+\s*個?\s*月)",
+            text or "",
+            re.IGNORECASE,
+        )
+    )
+
+
 def looks_like_expense_period_query(text: str) -> bool:
     """月份／日期查帳，不是記一筆。
 
@@ -143,8 +160,27 @@ def looks_like_expense_period_query(text: str) -> bool:
     t = (text or "").strip()
     if not t:
         return False
-    if re.search(r"(行程|安排|行事曆|日程|有什麼|有哪些|有事嗎|股價|漲幅|跌幅|持股)", t):
+    if re.search(r"(行程|安排|行事曆|日程|有什麼|有哪些|有事嗎|股價|漲幅|跌幅|持股|買賣)", t):
         return False
+    if _looks_like_time_range(t):
+        if not re.search(r"(花費|支出|消費|花了|花多少|明細|細項|記帳|合計|總額|統計|多少錢|總花費|總支出|總消費)", t):
+            return False
+        stripped = t
+        stripped = re.sub(
+            r"\d{1,2}\s*月(?:份)?\s*[-~～到至]\s*\d{1,2}\s*月(?:份)?|"
+            r"\d{1,2}\s*[-~～到至]\s*\d{1,2}\s*月(?:份)?|"
+            r"[一二三四五六七八九十兩]+\s*月?(?:份)?\s*[-~～到至]\s*[一二三四五六七八九十兩]+\s*月(?:份)?|"
+            r"\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[/-]\d{1,2}|"
+            r"\d{1,2}\s*月(?:份)?|"
+            r"(近|最近|過去|這)\s*[兩三四五六七八九十\d]+\s*個?\s*月|"
+            r"上半年|下半年|第[一二三四1-4]季|Q[1-4]|\d{4}\s*年",
+            " ",
+            stripped,
+            flags=re.IGNORECASE,
+        )
+        if re.search(r"\d", stripped):
+            return False
+        return True
     has_period = bool(
         re.search(
             r"(\d{1,2}\s*月(份)?|"
@@ -218,6 +254,18 @@ def looks_like_calendar_list(text: str) -> bool:
     t = (text or "").strip()
     if not t:
         return False
+    if re.search(r"(花費|支出|消費|花了|記帳|明細|總花費)", t) and not re.search(
+        r"(行程|安排|行事曆|日程|行程表)", t
+    ):
+        return False
+    if re.search(r"(早餐|午餐|晚餐|消夜|宵夜|元|塊)", t):
+        stripped = re.sub(
+            r"\d{1,2}\s*月(?:份)?|\d{1,2}[/-]\d{1,2}|[一二三四五六七八九十兩]+\s*月",
+            " ",
+            t,
+        )
+        if re.search(r"\d", stripped):
+            return False
     if re.search(r"(行程|安排|行事曆|日程|行程表)", t):
         return True
     # 明確月份／日期區間（即使沒說「行程」也當查行事曆）

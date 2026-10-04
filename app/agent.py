@@ -196,11 +196,7 @@ def _a_expenses(user_id: str, text: str, intent: Intent) -> AgentReply | None:
         )
 
     if intent in {Intent.EXPENSE_CHART, Intent.EXPENSE_QUERY}:
-        period = extract_period_hint(
-            t,
-            default="今天" if re.search(r"今天|今日", t) else "本月",
-        )
-        return _expense_full_reply(user_id, period)
+        return _expense_full_reply(user_id, t)
 
     if intent == Intent.EXPENSE_WRITE:
         items = parse_expense_utterances(t)

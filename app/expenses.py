@@ -635,9 +635,93 @@ def _money_parts(rows: list[Expense]) -> tuple[list[Expense], list[Expense], flo
     return spend, income, spend_total, income_total
 
 
+def resolve_expense_period(text: str, default: str | None = None) -> tuple[datetime, datetime, str]:
+    """從整句算出記帳區間。8-9月花費會含 8 月和 9 月，不會只剩後面那個月。"""
+    span = _expense_range_span(text)
+    if span:
+        return span
+    if default is None:
+        default = "今天" if re.search(r"今天|今日", text or "") else "本月"
+    return _resolve_period(extract_period_hint(text, default=default))
+
+
+def _expense_range_span(text: str) -> tuple[datetime, datetime, str] | None:
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    now = datetime.now()
+
+    m_recent = re.search(
+        r"(近|最近|過去|這)\s*([兩三四五六七八九十]|\d{1,2})\s*個?\s*月",
+        raw,
+    )
+    if m_recent:
+        token = m_recent.group(2)
+        n = int(token) if token.isdigit() else {"兩": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}.get(token, 0)
+        if 1 <= n <= 24:
+            start_month = now.month - (n - 1)
+            start_year = now.year
+            while start_month <= 0:
+                start_month += 12
+                start_year -= 1
+            start = datetime(start_year, start_month, 1)
+            end = datetime(now.year + (1 if now.month == 12 else 0), 1 if now.month == 12 else now.month + 1, 1)
+            return start, end, f"{start_year}/{start_month:02d}–{now.year}/{now.month:02d}"
+
+    year = now.year
+    if re.search(r"去年", raw):
+        year -= 1
+    elif re.search(r"明年", raw):
+        year += 1
+    if re.search(r"上半年", raw):
+        return datetime(year, 1, 1), datetime(year, 7, 1), f"{year} 上半年"
+    if re.search(r"下半年", raw):
+        return datetime(year, 7, 1), datetime(year + 1, 1, 1), f"{year} 下半年"
+    m_q = re.search(r"Q([1-4])|第([一二三四1-4])季", raw, re.IGNORECASE)
+    if m_q:
+        qtoken = m_q.group(1) or m_q.group(2)
+        q = int(qtoken) if qtoken.isdigit() else {"一": 1, "二": 2, "三": 3, "四": 4}[qtoken]
+        start_m = (q - 1) * 3 + 1
+        end_m = start_m + 3
+        end_y = year + 1 if end_m == 13 else year
+        end_m = 1 if end_m == 13 else end_m
+        return datetime(year, start_m, 1), datetime(end_y, end_m, 1), f"{year} Q{q}"
+
+    if not re.search(r"(到|至|~|～|-|—|–)", raw):
+        return None
+    m_days = re.search(
+        r"(\d{1,2})[/-](\d{1,2})\s*[-~～到至]\s*(\d{1,2})[/-](\d{1,2})",
+        raw,
+    )
+    if m_days:
+        y = now.year
+        try:
+            start = datetime(y, int(m_days.group(1)), int(m_days.group(2)))
+            end_day = datetime(y, int(m_days.group(3)), int(m_days.group(4)))
+        except ValueError:
+            start = end_day = None
+        if start and end_day:
+            if end_day < start:
+                end_day = datetime(y + 1, end_day.month, end_day.day)
+            end = end_day + timedelta(days=1)
+            return start, end, f"{start.strftime('%m/%d')}–{end_day.strftime('%m/%d')}"
+    from .calendar_google import parse_user_month_range
+
+    months = parse_user_month_range(raw)
+    if months:
+        (y1, m1), (y2, m2) = months
+        start = datetime(y1, m1, 1)
+        end = datetime(y2 + 1, 1, 1) if m2 == 12 else datetime(y2, m2 + 1, 1)
+        return start, end, f"{y1}/{m1:02d}–{y2}/{m2:02d}"
+    return None
+
+
 def _resolve_period(period: str) -> tuple[datetime, datetime, str]:
     now = datetime.now()
     p = (period or "month").strip()
+    ranged = _expense_range_span(p)
+    if ranged:
+        return ranged
 
     if p in ("day", "今天", "今日", "本日", "每天"):
         start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -703,7 +787,7 @@ def _resolve_period(period: str) -> tuple[datetime, datetime, str]:
 
 
 def list_expenses_on_date(session: Session, user_id: str, date_str: str) -> str:
-    start, end, label = _resolve_period(date_str)
+    start, end, label = resolve_expense_period(date_str)
     rows = (
         session.execute(
             select(Expense)
@@ -729,7 +813,7 @@ def list_expenses_on_date(session: Session, user_id: str, date_str: str) -> str:
 
 
 def summarize_expenses_period(session: Session, user_id: str, period: str = "month") -> str:
-    start, end, label = _resolve_period(period)
+    start, end, label = resolve_expense_period(period)
     rows = (
         session.execute(
             select(Expense)
@@ -770,7 +854,7 @@ def summarize_expenses_period(session: Session, user_id: str, period: str = "mon
 def category_breakdown(
     session: Session, user_id: str, period: str = "month"
 ) -> tuple[str, dict[str, float], str]:
-    start, end, label = _resolve_period(period)
+    start, end, label = resolve_expense_period(period)
     rows = (
         session.execute(
             select(Expense).where(
@@ -914,7 +998,7 @@ def build_expense_full_report(
         "chart_path": str | None,
       }
     """
-    start, end, label = _resolve_period(period)
+    start, end, label = resolve_expense_period(period)
     rows = (
         session.execute(
             select(Expense)
