@@ -293,6 +293,46 @@ def holding_added(
     )
 
 
+def holding_sold(
+    *,
+    sale_id: int,
+    symbol: str,
+    name: str,
+    sell_price: float,
+    quantity: float,
+    lots: float,
+    realized_pnl: float,
+    when_label: str,
+) -> dict:
+    color = C_UP if realized_pnl > 0 else (C_DOWN if realized_pnl < 0 else C_FLAT)
+    return bubble(
+        "已賣出",
+        [
+            _kv_row("編號", f"#{sale_id}"),
+            _kv_row("標的", f"{symbol}  {name}".strip()),
+            _kv_row("賣價", f"{sell_price:g}"),
+            _kv_row("數量", f"{quantity:.0f} 股（{lots:g} 張）"),
+            _kv_row("淨損益", f"${realized_pnl:,.0f}", color),
+            _kv_row("日期", when_label),
+        ],
+        subtitle="已實現",
+    )
+
+
+def stock_trades_card(*, label: str, lines: list[str], total_pnl: float) -> dict:
+    color = C_UP if total_pnl > 0 else (C_DOWN if total_pnl < 0 else C_FLAT)
+    body: list = [
+        _text(f"${total_pnl:,.0f}", size="3xl", weight="bold", color=color),
+        _text(f"{label} · 已實現淨損益", size="sm", color=C_MUTED, margin="sm"),
+        _sep("md"),
+    ]
+    for line in lines[:20]:
+        body.append(_text(line, size="sm", wrap=True, margin="sm"))
+    if len(lines) > 20:
+        body.append(_text(f"…還有 {len(lines) - 20} 筆", size="xs", color=C_MUTED, margin="sm"))
+    return bubble("買賣紀錄", body, subtitle="成交")
+
+
 def expense_deleted(
     *,
     expense_id: int,

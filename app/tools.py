@@ -316,6 +316,35 @@ def build_tools(session: Session, user_id: str) -> list[Callable]:
             note=note or None,
         )
 
+    def record_stock_sell(text: str) -> str:
+        """賣出目前持有的股票。
+
+        使用者說「賣出 00947 41元 全數」「賣掉 2 張」「淨賺 12000」時使用。
+        不要把這種句子記成日常花費。
+
+        Args:
+            text: 使用者原句，需含股票、賣價，以及股數或全數。
+        """
+        from .portfolio import record_stock_sale
+
+        data = record_stock_sale(session, user_id, text)
+        if data.get("error"):
+            return data["error"]
+        return data["message"]
+
+    def list_stock_trades(period: str) -> str:
+        """查某月或某段月份的股票買賣紀錄，以及這段賣出的已實現淨損益。
+
+        例如「10月買賣」「8月到10月股票損益」「10月 00947 買賣」。
+        不要拿來查日常消費。
+
+        Args:
+            period: 使用者原句或期間。
+        """
+        from .portfolio import query_stock_trades
+
+        return query_stock_trades(session, user_id, period)["text"]
+
     def my_portfolio() -> str:
         """查看目前持股清單，並用即時股價計算每檔與合計的盈虧、報酬率。
 
@@ -412,6 +441,8 @@ def build_tools(session: Session, user_id: str) -> list[Callable]:
         stock_movers,
         today_stock_queries,
         record_stock_buy,
+        record_stock_sell,
+        list_stock_trades,
         my_portfolio,
         close_stock_holding,
         google_calendar_list,

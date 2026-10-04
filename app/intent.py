@@ -15,6 +15,8 @@ from .expenses import looks_like_income, looks_like_refund
 
 class Intent(str, Enum):
     STOCK_BUY = "stock_buy"
+    STOCK_SELL = "stock_sell"
+    STOCK_TRADES = "stock_trades"
     EXPENSE_DELETE = "expense_delete"
     EXPENSE_CHART = "expense_chart"
     EXPENSE_QUERY = "expense_query"
@@ -64,7 +66,7 @@ def _has_stock_code(t: str) -> bool:
 
 def looks_like_stock_buy(text: str) -> bool:
     t = (text or "").strip()
-    if not t or not re.search(r"買", t):
+    if not t or not re.search(r"買(?!賣)", t):
         return False
     if re.search(r"(早餐|午餐|晚餐|消夜|捷運|記帳|花了多少|行程)", t):
         return False
@@ -73,6 +75,36 @@ def looks_like_stock_buy(text: str) -> bool:
         or _has_stock_code(t)
         or re.search(r"(買了?|買入|加碼)\s*[一-龥A-Za-z]{2,8}", t)
     )
+
+
+def looks_like_stock_sell(text: str) -> bool:
+    """賣出持股。須在記帳之前判斷，避免「41塊」被記成花費。"""
+    t = (text or "").strip()
+    if not t or not re.search(r"(賣出|賣掉|售出|出清|全數賣|結清)", t):
+        return False
+    if re.search(r"(早餐|午餐|晚餐|消夜|記帳|花費|消費|支出|行程|行事曆|判斷|分析|技術面)", t):
+        return False
+    return bool(
+        re.search(r"[A-Za-z]{0,2}\d{3,6}[A-Za-z]?", t)
+        or re.search(r"(持有|持股|股票|張)", t)
+        or re.search(r"(賣出|賣掉|出清)\s*[一-龥A-Za-z]{2,8}", t)
+    )
+
+
+def looks_like_stock_trades(text: str) -> bool:
+    """查一段期間的買賣紀錄與已實現損益。"""
+    t = (text or "").strip()
+    if not t:
+        return False
+    if re.search(r"(行程|安排|行事曆|日程|消費|花費|支出|記帳|早餐|午餐|晚餐)", t):
+        return False
+    if re.search(r"(買賣紀錄|交易紀錄|成交紀錄|賣出紀錄|買入紀錄|股票買賣|股票損益|已實現)", t):
+        return True
+    if re.search(r"買賣", t) and re.search(r"(月|今年|去年|全部|至今)", t):
+        return True
+    if re.search(r"(股票|持股).{0,6}(損益|買賣|交易)|(損益|買賣|交易).{0,6}(股票|持股)", t):
+        return True
+    return False
 
 
 def looks_like_calendar_add(text: str) -> bool:
@@ -156,7 +188,7 @@ def looks_like_expense_period_query(text: str) -> bool:
 
 def looks_like_expense_write(text: str) -> bool:
     t = (text or "").strip()
-    if not t or looks_like_stock_buy(t):
+    if not t or looks_like_stock_buy(t) or looks_like_stock_sell(t) or looks_like_stock_trades(t):
         return False
     if looks_like_expense_period_query(t):
         return False
@@ -302,6 +334,12 @@ def classify_intent(text: str) -> Intent:
     # 1.5) 技術面買賣建議（須最先攔截「判斷00947」，避免落到查股價）
     if extract_tech_query(t):
         return Intent.STOCK_TECH
+
+    # 1.6) 賣出持股／買賣紀錄（先於記帳與行程，避免「41塊」「8月到10月」被抢走）
+    if looks_like_stock_sell(t):
+        return Intent.STOCK_SELL
+    if looks_like_stock_trades(t):
+        return Intent.STOCK_TRADES
 
     # 2) 記帳刪除
     if re.search(

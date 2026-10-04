@@ -79,3 +79,32 @@ class Holding(Base):
     note: Mapped[str | None] = mapped_column(String(255), nullable=True)
     closed: Mapped[int] = mapped_column(Integer, default=0)  # 0=持有中 1=已結清
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class StockSale(Base):
+    """賣出紀錄。買入仍在 holdings，這裡只記成交與已實現損益。"""
+
+    __tablename__ = "stock_sales"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    symbol: Mapped[str] = mapped_column(String(16), index=True)
+    name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    sell_price: Mapped[float] = mapped_column(Float)
+    quantity: Mapped[float] = mapped_column(Float)
+    sold_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    realized_pnl: Mapped[float] = mapped_column(Float, default=0)
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class StockSaleLot(Base):
+    """一筆賣出扣到哪些買入（先進先出）。"""
+
+    __tablename__ = "stock_sale_lots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    sale_id: Mapped[int] = mapped_column(Integer, index=True)
+    holding_id: Mapped[int] = mapped_column(Integer, index=True)
+    quantity: Mapped[float] = mapped_column(Float)
+    buy_price: Mapped[float] = mapped_column(Float)

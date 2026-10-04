@@ -34,7 +34,9 @@ from .intent import Intent, classify_intent, extract_tech_query, looks_like_expe
 from .portfolio import (
     parse_stock_buy_utterance,
     portfolio_summary_data,
+    query_stock_trades,
     record_holding,
+    record_stock_sale,
     summarize_today_queries,
 )
 from .stock import (
@@ -423,6 +425,43 @@ def _a_stock_buy(user_id: str, text: str) -> AgentReply | None:
     )
 
 
+def _a_stock_sell(user_id: str, text: str) -> AgentReply:
+    with session_scope() as session:
+        data = record_stock_sale(session, user_id, text.strip())
+    if data.get("error"):
+        return _reply(data["error"], title="賣出")
+    return _reply(
+        data["message"],
+        flex_ui.holding_sold(
+            sale_id=data["id"],
+            symbol=data["symbol"],
+            name=data["name"],
+            sell_price=data["sell_price"],
+            quantity=data["quantity"],
+            lots=data["lots"],
+            realized_pnl=data["realized_pnl"],
+            when_label=data["when_label"],
+        ),
+        title="賣出",
+    )
+
+
+def _a_stock_trades(user_id: str, text: str) -> AgentReply:
+    with session_scope() as session:
+        report = query_stock_trades(session, user_id, text.strip())
+    if report["empty"]:
+        return _reply(report["text"], title="買賣紀錄")
+    return _reply(
+        report["text"],
+        flex_ui.stock_trades_card(
+            label=report["label"],
+            lines=report["lines"],
+            total_pnl=report["total_pnl"],
+        ),
+        title="買賣紀錄",
+    )
+
+
 def _a_stock_tech(text: str) -> AgentReply:
     """技術面判定：判斷／分析 + 代碼或名稱。"""
     from .analyzer import DISCLAIMER, run_analysis
@@ -467,6 +506,12 @@ def try_route_a(user_id: str, text: str) -> AgentReply | None:
 
     if intent == Intent.STOCK_BUY:
         return _a_stock_buy(user_id, t)
+
+    if intent == Intent.STOCK_SELL:
+        return _a_stock_sell(user_id, t)
+
+    if intent == Intent.STOCK_TRADES:
+        return _a_stock_trades(user_id, t)
 
     if intent == Intent.STOCK_TECH:
         return _a_stock_tech(t)
