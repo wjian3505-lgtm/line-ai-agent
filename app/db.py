@@ -84,6 +84,24 @@ def _backfill_user_seq(conn, table: str) -> None:
     )
 
 
+def _reclassify_miscategorized_income(conn) -> None:
+    """只改已記錯的那一筆：#136、10/3、其他、$300、項目收入。其餘舊帳不動。"""
+    from sqlalchemy import text
+
+    conn.execute(
+        text(
+            "UPDATE expenses "
+            "SET kind = 'income', category = '收入' "
+            "WHERE seq = 136 "
+            "AND category = '其他' "
+            "AND ABS(amount - 300) < 0.01 "
+            "AND TRIM(COALESCE(note, '')) = '收入' "
+            "AND date(spent_at) = '2026-10-03' "
+            "AND COALESCE(kind, 'expense') = 'expense'"
+        )
+    )
+
+
 def init_db() -> None:
     """建立所有資料表（若不存在），並補上既有資料缺的欄位。"""
     from sqlalchemy import inspect, text
@@ -113,6 +131,8 @@ def init_db() -> None:
                     f"ON {table} (user_id, seq)"
                 )
             )
+        if "expenses" in names:
+            _reclassify_miscategorized_income(conn)
 
 
 @contextmanager

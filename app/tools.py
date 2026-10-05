@@ -131,6 +131,7 @@ def build_tools(session: Session, user_id: str) -> list[Callable]:
         """記錄一筆花費。若未指定 category，會依項目內容自動判斷類別。
 
         類別只能是：伙食、購物、交通、娛樂、投資、其他。
+        項目若是收入、進帳、入帳、零用錢、紅包、薪水、薪資、獎金、收到錢，系統會改記成收入，不要填成其他。
 
         Args:
             amount: 金額（新台幣）。

@@ -103,7 +103,8 @@ def record_expense(
 ) -> dict:
     if amount <= 0:
         return {"error": "金額必須大於 0。"}
-    cat = classify_category(note, category)
+    as_income = _text_has_income_word(note)
+    cat = INCOME_CATEGORY if as_income else classify_category(note, category)
     when = spent_at or datetime.now()
     item = Expense(
         user_id=user_id,
@@ -112,14 +113,15 @@ def record_expense(
         category=cat,
         note=note or None,
         spent_at=when,
-        kind="expense",
+        kind="income" if as_income else "expense",
     )
     session.add(item)
     session.flush()
     weekday = "一二三四五六日"[when.weekday()]
     when_label = f"{when.strftime('%Y/%m/%d')}（週{weekday}）"
+    headline = "已記收入" if as_income else "已記帳"
     message = (
-        f"已記帳 #{show_no(item)}\n"
+        f"{headline} #{show_no(item)}\n"
         f"金額：${amount:,.0f}\n"
         f"類別：{cat}\n"
         f"項目：{note or '（無備註）'}\n"
@@ -180,19 +182,57 @@ def looks_like_refund(text: str) -> bool:
     return has_date and has_item
 
 
-def looks_like_income(text: str) -> bool:
-    """一般收入：不對到某一筆花費。有收回目標時不算收入。"""
-    t = (text or "").strip()
-    if not t or looks_like_refund(t):
-        return False
-    if not re.search(INCOME_WORDS, t):
-        return False
-    return _extract_money_amount(t) is not None
+_CN_NUM = {
+    "零": 0,
+    "〇": 0,
+    "一": 1,
+    "二": 2,
+    "兩": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+}
+_CN_NUM_CHARS = "".join(_CN_NUM)
+_CN_UNIT_CHARS = "十百千萬億"
 
 
-def _extract_money_amount(text: str) -> Optional[float]:
-    """第一個金額。略過日期裡的數字，以及 #編號。"""
+def _parse_chinese_amount(token: str) -> Optional[int]:
+    """三百 → 300、十五 → 15、三千五百 → 3500。認不出就回傳 None。"""
+    if not token:
+        return None
+    total = 0
+    section = 0
+    number = 0
+    for ch in token:
+        if ch in _CN_NUM:
+            number = _CN_NUM[ch]
+            continue
+        unit = {"十": 10, "百": 100, "千": 1000}.get(ch)
+        if unit:
+            section += (number or 1) * unit
+            number = 0
+            continue
+        if ch in ("萬", "億"):
+            group = section + number
+            total += (group or 1) * (10000 if ch == "萬" else 100000000)
+            section = 0
+            number = 0
+            continue
+        return None
+    value = total + section + number
+    if value <= 0:
+        return None
+    return value
+
+
+def _money_spans(text: str) -> list[tuple[int, int, float]]:
+    """句子裡的金額位置。略過日期、#編號，以及「週五」「十月」這種字。"""
     raw = text or ""
+    spans: list[tuple[int, int, float]] = []
     for m in re.finditer(r"(\d{1,7}(?:\.\d{1,2})?)", raw):
         left = raw[m.start() - 1] if m.start() else ""
         right = raw[m.end()] if m.end() < len(raw) else ""
@@ -201,8 +241,59 @@ def _extract_money_amount(text: str) -> Optional[float]:
         prefix = raw[max(0, m.start() - 3) : m.start()]
         if re.search(r"[#＃]\s*$", prefix):
             continue
-        return float(m.group(1))
-    return None
+        spans.append((m.start(), m.end(), float(m.group(1))))
+    for m in re.finditer(rf"[{_CN_NUM_CHARS}{_CN_UNIT_CHARS}]+", raw):
+        token = m.group()
+        right = raw[m.end()] if m.end() < len(raw) else ""
+        # 空字串 in 「月年」會成立，句尾的「三百」不能因此被略過。
+        if right and right in "月年號日":
+            continue
+        has_unit = any(ch in token for ch in _CN_UNIT_CHARS)
+        if not has_unit and right not in ("元", "塊"):
+            continue
+        value = _parse_chinese_amount(token)
+        if value is None:
+            continue
+        spans.append((m.start(), m.end(), float(value)))
+    spans.sort(key=lambda item: (item[0], item[1]))
+    kept: list[tuple[int, int, float]] = []
+    last_end = -1
+    for start, end, amount in spans:
+        if start < last_end:
+            continue
+        kept.append((start, end, amount))
+        last_end = end
+    return kept
+
+
+def _text_has_income_word(text: str) -> bool:
+    return bool(re.search(INCOME_WORDS, text or ""))
+
+
+def looks_like_income(text: str) -> bool:
+    """整句都是收入才算。夾著午餐、交通這類花費時改由記帳拆開，不整句當收入。"""
+    t = (text or "").strip()
+    if not t or looks_like_refund(t):
+        return False
+    if not _text_has_income_word(t):
+        return False
+    if _extract_money_amount(t) is None:
+        return False
+    chunks, _shared = _bookkeeping_chunks(t)
+    for chunk in chunks:
+        if _extract_money_amount(chunk) is None:
+            continue
+        if not _text_has_income_word(chunk):
+            return False
+    return True
+
+
+def _extract_money_amount(text: str) -> Optional[float]:
+    """第一個金額。略過日期裡的數字，以及 #編號。也認「三百」。"""
+    spans = _money_spans(text or "")
+    if not spans:
+        return None
+    return spans[0][2]
 
 
 def _refund_item_hint(text: str) -> str:
@@ -362,6 +453,7 @@ def _income_note(text: str) -> str:
     t = re.sub(INCOME_WORDS, " ", text or "")
     t = re.sub(r"\d{4}[-/]\d{1,2}[-/]\d{1,2}|\d{1,2}[/-]\d{1,2}", " ", t)
     t = re.sub(r"\d{1,7}(?:\.\d{1,2})?", " ", t)
+    t = re.sub(rf"[{_CN_NUM_CHARS}{_CN_UNIT_CHARS}]+", " ", t)
     t = re.sub(r"(元|塊|今天|今日|昨天|昨日|幫我|記下|記錄|記帳)", " ", t)
     t = re.sub(r"\s+", " ", t).strip(" ，,。")
     if t:
@@ -404,7 +496,7 @@ def _parse_one_expense_line(
     raw = (line or "").strip()
     if not raw:
         return None
-    if looks_like_refund(raw) or looks_like_income(raw):
+    if looks_like_refund(raw):
         return None
     if re.search(r"(行程|行事曆|股價|漲幅|跌幅|盈虧|報酬率|安排)", raw):
         return None
@@ -437,30 +529,14 @@ def _parse_one_expense_line(
     work = re.sub(r"(今天|今日|昨天|昨日)", " ", work)
     work = re.sub(r"\s+", " ", work).strip(" ，,。")
 
-    m_amt = re.search(
-        r"(?:NT\$|\$|＄)\s*(\d{1,7}(?:\.\d{1,2})?)",
-        work,
-        re.IGNORECASE,
-    )
-    if not m_amt:
-        m_amt = re.search(
-            r"(\d{1,7}(?:\.\d{1,2})?)\s*(元|塊)",
-            work,
-        )
-    if not m_amt:
-        for m in re.finditer(r"(\d{1,7}(?:\.\d{1,2})?)", work):
-            left = work[m.start() - 1] if m.start() > 0 else ""
-            right = work[m.end()] if m.end() < len(work) else ""
-            if left in ("/", "-") or right in ("/", "-", "月", "年", "號", "日"):
-                continue
-            m_amt = m
-            break
-    if not m_amt:
+    spans = _money_spans(work)
+    if not spans:
         return None
-    amount = float(m_amt.group(1))
+    span_start, span_end, amount = spans[0]
 
-    note = (work[: m_amt.start()] + " " + work[m_amt.end() :]).strip()
+    note = (work[:span_start] + " " + work[span_end:]).strip()
     note = re.sub(r"^(幫我)?(記帳|記錄|記下|記一下|記了?)\s*", "", note).strip(" ，,。/\\")
+    note = re.sub(r"(^|\s)(元|塊)(?=\s|$)", " ", note)
     note = re.sub(r"(元|塊)\s*$", "", note).strip()
     note = re.sub(r"\s+", " ", note).strip(" ，,。/\\")
     if not note:
@@ -496,28 +572,41 @@ def _parse_date_only_line(line: str) -> Optional[datetime]:
 
 
 def _split_inline_expense_chunks(line: str) -> list[str]:
-    """同一行多筆：停車費 490 停車費 150 → 切開。"""
+    """同一行多筆：停車費 490 停車費 150、午餐 100 收入 200 → 切開。"""
     raw = (line or "").strip()
     if not raw:
         return []
-    # 模式：非數字片段 + 金額（可帶元/塊/$）
-    pairs = list(
-        re.finditer(
-            r"([^\d\r\n]{1,40}?)\s*(?:NT\$|\$|＄)?\s*(\d{1,7}(?:\.\d{1,2})?)\s*(?:元|塊)?",
-            raw,
-            re.IGNORECASE,
-        )
-    )
-    if len(pairs) <= 1:
+    spans = _money_spans(raw)
+    if len(spans) <= 1:
         return [raw]
     chunks: list[str] = []
-    for m in pairs:
-        note = m.group(1).strip(" ，,。;；/|")
-        amt = m.group(2)
-        if not note or re.fullmatch(r"[\s/.\-]*", note):
-            continue
-        chunks.append(f"{note} {amt}")
+    prev = 0
+    for start, end, _amount in spans:
+        piece = raw[prev:end].strip(" ，,。;；/|")
+        prev = end
+        if piece and not re.fullmatch(r"[\s/.\-]*", piece):
+            chunks.append(piece)
     return chunks if len(chunks) >= 2 else [raw]
+
+
+def _bookkeeping_chunks(text: str) -> tuple[list[str], Optional[datetime]]:
+    """拆成一筆一筆的記帳短句，並帶出多行共用的日期。"""
+    raw = (text or "").strip()
+    if not raw:
+        return [], None
+    lines = [ln.strip() for ln in re.split(r"[\r\n]+", raw) if ln.strip()]
+    shared_date: Optional[datetime] = None
+    body_lines: list[str] = []
+    for ln in lines:
+        only_date = _parse_date_only_line(ln)
+        if only_date is not None and not body_lines:
+            shared_date = only_date
+            continue
+        body_lines.append(ln)
+    expanded: list[str] = []
+    for ln in body_lines:
+        expanded.extend(_split_inline_expense_chunks(ln))
+    return expanded, shared_date
 
 
 def parse_expense_utterances(text: str) -> list[tuple[float, str, datetime]]:
@@ -538,24 +627,9 @@ def parse_expense_utterances(text: str) -> list[tuple[float, str, datetime]]:
     if re.search(r"(行程|行事曆|股價|漲幅|跌幅|盈虧|報酬率)", raw):
         return []
 
-    lines = [ln.strip() for ln in re.split(r"[\r\n]+", raw) if ln.strip()]
-    shared_date: Optional[datetime] = None
-    body_lines: list[str] = []
-
-    for ln in lines:
-        only_date = _parse_date_only_line(ln)
-        if only_date is not None and not body_lines:
-            shared_date = only_date
-            continue
-        body_lines.append(ln)
-
-    if not body_lines:
+    expanded, shared_date = _bookkeeping_chunks(raw)
+    if not expanded:
         return []
-
-    # 展開同一行多筆
-    expanded: list[str] = []
-    for ln in body_lines:
-        expanded.extend(_split_inline_expense_chunks(ln))
 
     results: list[tuple[float, str, datetime]] = []
     for ln in expanded:

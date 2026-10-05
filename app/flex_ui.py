@@ -242,13 +242,19 @@ def expenses_added_batch(
     when_label: str,
 ) -> dict:
     """一次多筆記帳成功卡。rows: [{id, note, amount, category}, ...]"""
-    total = sum(float(r.get("amount") or 0) for r in rows)
-    body: list = [
-        _kv_row("筆數", f"{len(rows)} 筆"),
-        _kv_row("合計", f"${total:,.0f}", C_ACCENT),
-        _kv_row("日期", when_label),
-        {"type": "separator", "margin": "md"},
-    ]
+    income_rows = [r for r in rows if r.get("category") == "收入"]
+    spend_rows = [r for r in rows if r.get("category") != "收入"]
+    body: list = [_kv_row("筆數", f"{len(rows)} 筆")]
+    if income_rows and spend_rows:
+        spend_total = sum(float(r.get("amount") or 0) for r in spend_rows)
+        income_total = sum(float(r.get("amount") or 0) for r in income_rows)
+        body.append(_kv_row("花費", f"${spend_total:,.0f}", C_ACCENT))
+        body.append(_kv_row("收入", f"${income_total:,.0f}", C_OK))
+    else:
+        total = sum(float(r.get("amount") or 0) for r in rows)
+        body.append(_kv_row("合計", f"${total:,.0f}", C_ACCENT))
+    body.append(_kv_row("日期", when_label))
+    body.append({"type": "separator", "margin": "md"})
     for r in rows[:12]:
         note = r.get("note") or "（無）"
         body.append(

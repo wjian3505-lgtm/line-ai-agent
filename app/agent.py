@@ -83,6 +83,7 @@ SYSTEM_PROMPT = """你是一位貼心、可靠的中文個人助理，服務於 
 - 需要資料時必須呼叫工具，不要編造。
 - 相對時間依「目前時間」換算成明確日期再存。
 - 口語記帳請呼叫 add_expense（可留空 category 讓系統分類）；金額、項目、日期要盡量填對。
+- 收入、進帳、薪水、獎金、零用錢、紅包請把那個詞寫進 note。系統會記成收入，不要把這類項目標成其他或伙食。
 - 記帳 #編號 是記帳 id，不是行事曆或行程編號；刪記帳用 delete_expense。
 - 查行事曆／行程一律用 Google：列表 google_calendar_list、新增 google_calendar_add、刪除 google_calendar_delete。
 - 像「10/10 下午五點 演唱會」這種句子，請用 google_calendar_add（系統會自動備份本機）。
@@ -231,11 +232,21 @@ def _a_expenses(user_id: str, text: str, intent: Intent) -> AgentReply | None:
                 title="記帳",
             )
 
-        total = sum(float(x["amount"]) for x in saved)
-        lines = [
-            f"已一次記帳 {len(saved)} 筆，合計 ${total:,.0f}",
-            f"日期：{saved[0]['when_label']}",
-        ]
+        income_rows = [x for x in saved if x.get("category") == "收入"]
+        spend_rows = [x for x in saved if x.get("category") != "收入"]
+        lines = [f"已一次記下 {len(saved)} 筆", f"日期：{saved[0]['when_label']}"]
+        if spend_rows:
+            spend_total = sum(float(x["amount"]) for x in spend_rows)
+            lines.append(f"花費：${spend_total:,.0f}")
+        if income_rows:
+            income_total = sum(float(x["amount"]) for x in income_rows)
+            lines.append(f"收入：${income_total:,.0f}")
+        if not income_rows:
+            total = sum(float(x["amount"]) for x in saved)
+            lines = [
+                f"已一次記帳 {len(saved)} 筆，合計 ${total:,.0f}",
+                f"日期：{saved[0]['when_label']}",
+            ]
         for x in saved:
             lines.append(f"#{x['id']} {x['note']} ${x['amount']:,.0f}（{x['category']}）")
         return _reply(
