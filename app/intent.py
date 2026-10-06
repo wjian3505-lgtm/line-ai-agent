@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from enum import Enum
 
-from .expenses import looks_like_income, looks_like_refund
+from .expenses import _extract_money_amount, _is_subscription, looks_like_income, looks_like_refund
 
 
 class Intent(str, Enum):
@@ -67,6 +67,8 @@ def _has_stock_code(t: str) -> bool:
 def looks_like_stock_buy(text: str) -> bool:
     t = (text or "").strip()
     if not t or not re.search(r"買(?!賣)", t):
+        return False
+    if _is_subscription(t) and _extract_money_amount(t):
         return False
     if re.search(r"(早餐|午餐|晚餐|消夜|捷運|記帳|花了多少|行程)", t):
         return False
@@ -236,7 +238,8 @@ def looks_like_expense_write(text: str) -> bool:
     ):
         return False
     return bool(
-        re.search(
+        (_is_subscription(t) and _extract_money_amount(t))
+        or re.search(
             r"(記帳|記下|記錄|記一下|花了|支出|消費|"
             r"元|塊|"
             r"早餐|午餐|晚餐|消夜|宵夜|便當|捷運|咖啡|加油|停車|電影)",

@@ -18,7 +18,7 @@ from .config import settings
 from .models import Expense
 from .user_seq import find_by_seq, next_seq, show_no
 
-CATEGORIES = ("伙食", "購物", "交通", "娛樂", "投資", "其他")
+CATEGORIES = ("伙食", "購物", "交通", "娛樂", "投資", "訂閱", "其他")
 _pending_images: ContextVar[list] = ContextVar("expense_pending_images", default=None)
 
 
@@ -56,8 +56,7 @@ _CATEGORY_KEYWORDS = {
     ],
     "娛樂": [
         "電影", "演唱會", "ktv", "遊戲", "娛樂", "旅遊", "住宿", "飯店", "門票",
-        "展覽", "遊樂園", "酒吧", "健身", "健身房", "按摩", "netflix", "spotify",
-        "訂閱",
+        "展覽", "遊樂園", "酒吧", "健身", "健身房", "按摩",
     ],
     "投資": [
         "股票", "買股", "基金", "投資", "手續費", "匯費", "加密", "比特幣",
@@ -66,10 +65,62 @@ _CATEGORY_KEYWORDS = {
 }
 
 
+# 短英文代號要整詞比對，避免 xq 黏在別的英文字裡。
+_SUBSCRIPTION_BOUNDED = {"xq"}
+_SUBSCRIPTION_KEYWORDS = (
+    "訂閱",
+    "月費",
+    "年費",
+    "會員費",
+    "方案",
+    "premium",
+    "netflix",
+    "spotify",
+    "youtube",
+    "disney",
+    "icloud",
+    "google one",
+    "adobe",
+    "notion",
+    "chatgpt",
+    "chat gpt",
+    "cursor",
+    "claude",
+    "gemini",
+    "xq",
+    "富果",
+    "fugle",
+    "玩股網",
+    "三竹",
+    "histock",
+    "cmoney",
+    "tradingview",
+    "看盤",
+    "行情軟體",
+    "股市軟體",
+)
+
+
+def _is_subscription(text: str) -> bool:
+    raw = (text or "").lower()
+    if not raw:
+        return False
+    for word in _SUBSCRIPTION_KEYWORDS:
+        if word in _SUBSCRIPTION_BOUNDED:
+            if re.search(rf"(?<![a-z]){re.escape(word)}(?![a-z])", raw):
+                return True
+            continue
+        if word in raw:
+            return True
+    return False
+
+
 def classify_category(note: str, category: str = "") -> str:
+    text = (note or "").lower()
+    if _is_subscription(text):
+        return "訂閱"
     if category and category in CATEGORIES:
         return category
-    text = (note or "").lower()
     for cat, words in _CATEGORY_KEYWORDS.items():
         for w in words:
             if w.lower() in text:

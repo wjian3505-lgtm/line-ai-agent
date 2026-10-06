@@ -130,8 +130,9 @@ def build_tools(session: Session, user_id: str) -> list[Callable]:
     def add_expense(amount: float, note: str = "", category: str = "", spent_at: str = "") -> str:
         """記錄一筆花費。若未指定 category，會依項目內容自動判斷類別。
 
-        類別只能是：伙食、購物、交通、娛樂、投資、其他。
+        類別只能是：伙食、購物、交通、娛樂、投資、訂閱、其他。
         項目若是收入、進帳、入帳、零用錢、紅包、薪水、薪資、獎金、收到錢，系統會改記成收入，不要填成其他。
+        Netflix、Spotify、YouTube、ChatGPT、Cursor、Claude、Gemini、iCloud、XQ、富果、看盤軟體、月費、年費會改記成訂閱。
 
         Args:
             amount: 金額（新台幣）。
