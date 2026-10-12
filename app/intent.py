@@ -10,7 +10,14 @@ from __future__ import annotations
 import re
 from enum import Enum
 
-from .expenses import _extract_money_amount, _is_subscription, looks_like_income, looks_like_refund
+from .expenses import (
+    _extract_money_amount,
+    _is_subscription,
+    looks_like_income,
+    looks_like_refund,
+    looks_like_refund_cancel,
+    looks_like_refund_edit,
+)
 
 
 class Intent(str, Enum):
@@ -22,6 +29,8 @@ class Intent(str, Enum):
     EXPENSE_QUERY = "expense_query"
     EXPENSE_WRITE = "expense_write"
     EXPENSE_REFUND = "expense_refund"
+    EXPENSE_REFUND_CANCEL = "expense_refund_cancel"
+    EXPENSE_REFUND_EDIT = "expense_refund_edit"
     EXPENSE_INCOME = "expense_income"
     CALENDAR_DELETE = "calendar_delete"
     CALENDAR_ADD = "calendar_add"  # 交 B
@@ -391,6 +400,12 @@ def classify_intent(text: str) -> Intent:
         return Intent.STOCK_SELL
     if looks_like_stock_trades(t):
         return Intent.STOCK_TRADES
+
+    # 2) 取消收回／改收回金額（先於刪除與記帳，避免「取消收回 1000」被記成花費）
+    if looks_like_refund_cancel(t):
+        return Intent.EXPENSE_REFUND_CANCEL
+    if looks_like_refund_edit(t):
+        return Intent.EXPENSE_REFUND_EDIT
 
     # 2) 記帳刪除
     if re.search(

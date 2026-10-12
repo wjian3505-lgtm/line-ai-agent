@@ -21,7 +21,9 @@ from .db import session_scope
 from .expenses import (
     build_expense_full_report,
     delete_expense_record,
+    cancel_refund_record,
     record_income,
+    update_refund_amount,
     record_refund,
     extract_period_hint,
     get_pending_images,
@@ -162,6 +164,16 @@ def _a_expenses(user_id: str, text: str, intent: Intent) -> AgentReply | None:
         with session_scope() as session:
             msg = delete_expense_record(session, user_id, int(m_del.group(1)))
         return _reply(msg, title="記帳")
+
+    if intent == Intent.EXPENSE_REFUND_CANCEL:
+        with session_scope() as session:
+            msg = cancel_refund_record(session, user_id, t)
+        return _reply(msg, title="收回")
+
+    if intent == Intent.EXPENSE_REFUND_EDIT:
+        with session_scope() as session:
+            msg = update_refund_amount(session, user_id, t)
+        return _reply(msg, title="收回")
 
     if intent == Intent.EXPENSE_REFUND:
         with session_scope() as session:
@@ -530,6 +542,8 @@ def try_route_a(user_id: str, text: str) -> AgentReply | None:
         Intent.EXPENSE_QUERY,
         Intent.EXPENSE_WRITE,
         Intent.EXPENSE_REFUND,
+        Intent.EXPENSE_REFUND_CANCEL,
+        Intent.EXPENSE_REFUND_EDIT,
         Intent.EXPENSE_INCOME,
     }:
         reply = _a_expenses(user_id, t, intent)

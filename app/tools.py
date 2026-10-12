@@ -132,6 +132,7 @@ def build_tools(session: Session, user_id: str) -> list[Callable]:
 
         類別只能是：伙食、購物、交通、娛樂、投資、訂閱、其他。
         項目若是收入、進帳、入帳、零用錢、紅包、薪水、薪資、獎金、收到錢，系統會改記成收入，不要填成其他。
+        「收回」「取消收回」不是花費。取消收回不要呼叫本工具。
         Netflix、Spotify、YouTube、ChatGPT、Cursor、Claude、Gemini、iCloud、XQ、富果、看盤軟體、月費、年費會改記成訂閱。
 
         Args:

@@ -154,6 +154,10 @@ def record_expense(
 ) -> dict:
     if amount <= 0:
         return {"error": "金額必須大於 0。"}
+    if _note_is_refund_command(note):
+        return {
+            "error": "這不是一筆花費。取消收回請傳「取消收回 1000」或「刪除 #編號」。新的收回請傳「收回 #編號 金額」。"
+        }
     as_income = _text_has_income_word(note)
     cat = INCOME_CATEGORY if as_income else classify_category(note, category)
     when = spent_at or datetime.now()
@@ -214,12 +218,32 @@ INCOME_WORDS = r"收入|進帳|入帳|零用錢|紅包|薪水|薪資|獎金|收�
 INCOME_CATEGORY = "收入"
 
 
+def looks_like_refund_cancel(text: str) -> bool:
+    """取消收回 1000、取消收回 #153。不是一筆新的花費。"""
+    t = (text or "").strip()
+    return bool(re.search(r"(?:取消|刪除|刪掉|刪去|移除)\s*(?:這筆|該筆)?\s*(?:收回|退回)", t))
+
+
+def looks_like_refund_edit(text: str) -> bool:
+    """更改 #153 500、收回 #153 改成 500。改原收回的金額。"""
+    t = (text or "").strip()
+    if not re.search(r"[#＃]\s*\d+", t):
+        return False
+    if not re.search(r"(?:更改|修改|改成|改為)", t):
+        return False
+    return bool(re.search(REFUND_WORDS, t) or re.search(r"(?:更改|修改)\s*[#＃]", t))
+
+
 def looks_like_refund(text: str) -> bool:
-    """收回某一筆：要有收回類用詞，且有 #編號，或同時有日期與項目。"""
+    """收回某一筆。沒有編號時也先接住，避免被記成正數花費。"""
     t = (text or "").strip()
     if not t or not re.search(REFUND_WORDS, t, re.IGNORECASE):
         return False
+    if looks_like_refund_cancel(t) or looks_like_refund_edit(t):
+        return False
     if re.search(r"[#＃]\s*\d+", t):
+        return True
+    if _extract_money_amount(t) is not None:
         return True
     has_date = bool(
         re.search(
@@ -357,11 +381,27 @@ def _refund_item_hint(text: str) -> str:
     return t
 
 
+def _note_is_refund_command(note: str) -> bool:
+    text = re.sub(r"\s+", "", note or "")
+    return bool(re.fullmatch(r"(?:取消|刪除|刪掉)?收回", text) or re.fullmatch(r"取消收回\d*", text))
+
+
+def _is_refund_like(row: Expense) -> bool:
+    kind = getattr(row, "kind", None) or ""
+    if kind == "refund":
+        return True
+    return bool(re.search(r"收回|退回", row.note or ""))
+
+
 def record_refund(session: Session, user_id: str, text: str) -> dict:
     """另記一筆負數，扣在原支出的同一天、同一類別。不改原紀錄。"""
     amount = _extract_money_amount(text)
     if amount is None or amount <= 0:
         return {"error": "請寫收回金額，例如：收回 #74 200。"}
+    if not re.search(r"[#＃]\s*\d+", text) and not _refund_item_hint(text):
+        return {
+            "error": "要收回哪一筆？請寫「收回 #編號 金額」，例如：收回 #120 1000。\n編號可查「今天花了多少」。"
+        }
     target = _find_refund_target(session, user_id, text)
     if isinstance(target, str):
         return {"error": target}
@@ -485,7 +525,9 @@ def _find_refund_target(session: Session, user_id: str, text: str) -> Expense | 
     return rows[0]
 
 
-def _refunded_amount(session: Session, user_id: str, expense_id: int) -> float:
+def _refunded_amount(
+    session: Session, user_id: str, expense_id: int, *, exclude_id: int | None = None
+) -> float:
     rows = (
         session.execute(
             select(Expense).where(
@@ -497,7 +539,110 @@ def _refunded_amount(session: Session, user_id: str, expense_id: int) -> float:
         .scalars()
         .all()
     )
-    return float(sum(-r.amount for r in rows if r.amount < 0))
+    return float(
+        sum(-r.amount for r in rows if r.amount < 0 and r.id != exclude_id)
+    )
+
+
+def _refund_delete_summary(item: Expense) -> str:
+    when = item.spent_at or item.created_at
+    wd = _weekday_name(when) if when else "?"
+    ts = when.strftime("%Y/%m/%d") if when else ""
+    note = item.note or "收回"
+    summary = (
+        f"已取消收回 #{show_no(item)}\n"
+        f"金額：${abs(float(item.amount)):,.0f}\n"
+        f"項目：{note}\n"
+        f"時間：{ts}（週{wd}）"
+    )
+    return summary
+
+
+def cancel_refund_record(session: Session, user_id: str, text: str) -> str:
+    """刪掉一筆收回。有編號就刪那筆；只有金額就找收回紀錄，不另記花費。"""
+    m_id = re.search(r"[#＃]\s*(\d+)", text or "")
+    if m_id:
+        item = find_by_seq(session, Expense, user_id, int(m_id.group(1)))
+        if not item:
+            return f"找不到記帳 #{m_id.group(1)}。"
+        if not _is_refund_like(item):
+            return (
+                f"#{show_no(item)} 不是收回紀錄。"
+                f"若要刪這筆花費請用「刪除 #{show_no(item)}」。"
+            )
+        summary = _refund_delete_summary(item)
+        session.delete(item)
+        session.flush()
+        return summary
+
+    amount = _extract_money_amount(text)
+    if amount is None or amount <= 0:
+        return "請寫要取消的收回金額或編號，例如：取消收回 1000、取消收回 #153。"
+    rows = (
+        session.execute(select(Expense).where(Expense.user_id == user_id).order_by(Expense.id.desc()))
+        .scalars()
+        .all()
+    )
+    matches = [
+        r
+        for r in rows
+        if _is_refund_like(r) and abs(abs(float(r.amount)) - float(amount)) < 0.01
+    ]
+    today = datetime.now().date()
+    today_rows = [
+        r for r in matches if (r.spent_at or r.created_at) and (r.spent_at or r.created_at).date() == today
+    ]
+    pool = today_rows or matches
+    if not pool:
+        return (
+            f"找不到 ${amount:,.0f} 的收回。"
+            "可先查「今天花了多少」看編號，再傳「刪除 #編號」。"
+        )
+    if len(pool) > 1:
+        shown = "、".join(
+            f"#{show_no(r)} ${abs(float(r.amount)):,.0f} {r.note or '收回'}" for r in pool[:6]
+        )
+        return f"有多筆 ${amount:,.0f} 的收回，請指定編號。例如：取消收回 #{show_no(pool[0])}。\n{shown}"
+    item = pool[0]
+    summary = _refund_delete_summary(item)
+    session.delete(item)
+    session.flush()
+    return summary
+
+
+def update_refund_amount(session: Session, user_id: str, text: str) -> str:
+    """改某一筆收回的金額，不新增一筆。"""
+    m_id = re.search(r"[#＃]\s*(\d+)", text or "")
+    if not m_id:
+        return "請指定要改的收回編號，例如：更改 #153 500。"
+    amount = _extract_money_amount(text)
+    if amount is None or amount <= 0:
+        return f"請寫新的收回金額，例如：更改 #{m_id.group(1)} 500。"
+    item = find_by_seq(session, Expense, user_id, int(m_id.group(1)))
+    if not item:
+        return f"找不到記帳 #{m_id.group(1)}。"
+    if not _is_refund_like(item):
+        return f"#{show_no(item)} 不是收回紀錄。一般花費請用「刪除 #{show_no(item)}」後重記。"
+    if (getattr(item, "kind", None) or "") != "refund" or not item.related_id:
+        old = abs(float(item.amount))
+        return (
+            f"#{show_no(item)} 這筆收回沒有對到原來的支出，沒辦法只改金額。\n"
+            f"請先傳「取消收回 {old:,.0f}」刪掉，再傳「收回 #編號 {amount:,.0f}」。"
+        )
+    target = session.get(Expense, item.related_id)
+    if not target or target.user_id != user_id:
+        return f"#{show_no(item)} 對不到原來的支出。請先取消這筆收回再重記。"
+    already = _refunded_amount(session, user_id, target.id, exclude_id=item.id)
+    remaining = float(target.amount) - already
+    if amount > remaining + 1e-6:
+        return f"#{show_no(target)} 最多還能收回 ${remaining:,.0f}，不能改成 {amount:,.0f}。"
+    item.amount = -float(amount)
+    session.flush()
+    return (
+        f"已把收回 #{show_no(item)} 改成 ${amount:,.0f}\n"
+        f"對應：#{show_no(target)} {target.note or ''}\n"
+        f"這筆剩餘：${remaining - amount:,.0f}"
+    )
 
 
 def _income_note(text: str) -> str:
