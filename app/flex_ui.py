@@ -623,6 +623,13 @@ def stock_movers_card(
     return head
 
 
+def _format_portfolio_price(value) -> str:
+    try:
+        return f"{float(value):.2f}".rstrip("0").rstrip(".")
+    except (TypeError, ValueError):
+        return str(value or "")
+
+
 def portfolio_card(*, rows: list[dict], total: Optional[dict] = None) -> dict:
     """持股卡：漲紅跌綠（台股習慣）。"""
     if not rows:
@@ -638,7 +645,7 @@ def portfolio_card(*, rows: list[dict], total: Optional[dict] = None) -> dict:
         if r.get("error"):
             contents.append(
                 _text(
-                    f"#{r.get('id')}  {r.get('symbol')}  {r.get('name') or ''}".strip(),
+                    f"{r.get('symbol')}  {r.get('name') or ''}".strip(),
                     size="sm",
                     weight="bold",
                 )
@@ -673,7 +680,7 @@ def portfolio_card(*, rows: list[dict], total: Optional[dict] = None) -> dict:
             )
         )
         contents.append(
-            _text(f"買入價：{buy}", size="xs", color=C_MUTED, margin="xs")
+            _text(f"均價：{_format_portfolio_price(buy)}", size="xs", color=C_MUTED, margin="xs")
         )
         contents.append(
             {
@@ -683,7 +690,7 @@ def portfolio_card(*, rows: list[dict], total: Optional[dict] = None) -> dict:
                 "contents": [
                     _text("現在價：", size="xs", color=C_MUTED, flex=0),
                     _text(
-                        f"{current}",
+                        _format_portfolio_price(current),
                         size="sm",
                         color=price_color,
                         weight="bold",

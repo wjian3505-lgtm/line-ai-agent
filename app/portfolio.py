@@ -220,12 +220,12 @@ def portfolio_summary(session: Session, user_id: str) -> str:
     lines = ["📈 持股損益一覽"]
     for r in data["rows"]:
         if r.get("error"):
-            lines.append(f"#{r['id']} {r['symbol']} {r.get('name') or ''}：目前報價取得失敗")
+            lines.append(f"{r['symbol']} {r.get('name') or ''}：目前報價取得失敗")
             continue
         arrow = "▲" if r["pnl"] > 0 else ("▼" if r["pnl"] < 0 else "－")
         lines.append(
-            f"#{r['id']} {r['symbol']} {r.get('name') or ''}\n"
-            f"　買入 {r['buy']} → 現價 {r['current']}  × {r['qty']}\n"
+            f"{r['symbol']} {r.get('name') or ''}\n"
+            f"　均價 {_format_price(r['buy'])} → 現價 {_format_price(r['current'])}  × {r['qty']}\n"
             f"　{arrow} 盈虧 ${r['pnl']:,.0f}（報酬率 {r['roi']:+.2f}%）"
         )
     total = data.get("total")
@@ -239,7 +239,12 @@ def portfolio_summary(session: Session, user_id: str) -> str:
     return "\n".join(lines)
 
 
+def _format_price(value: float) -> str:
+    return f"{float(value):.2f}".rstrip("0").rstrip(".")
+
+
 def portfolio_summary_data(session: Session, user_id: str) -> dict:
+    """同一代號併成一列。均價＝剩餘股數的加權成本，賣出仍按原買入批次扣。"""
     rows_db = (
         session.execute(
             select(Holding)
@@ -250,39 +255,52 @@ def portfolio_summary_data(session: Session, user_id: str) -> dict:
         .all()
     )
     sold_map = _sold_quantity_map(session, [r.id for r in rows_db])
-    rows: List[dict] = []
-    total_cost = 0.0
-    total_value = 0.0
+    grouped: dict[str, dict] = {}
+    order: list[str] = []
     for r in rows_db:
         qty_left = _remaining_quantity(r, sold_map)
         if qty_left <= 0:
             continue
-        q = get_stock_quote(r.symbol)
+        bucket = grouped.get(r.symbol)
+        if bucket is None:
+            bucket = {"symbol": r.symbol, "name": r.name or "", "qty": 0.0, "cost": 0.0}
+            grouped[r.symbol] = bucket
+            order.append(r.symbol)
+        bucket["qty"] += qty_left
+        bucket["cost"] += float(r.buy_price) * qty_left
+        if r.name:
+            bucket["name"] = r.name
+
+    rows: List[dict] = []
+    total_cost = 0.0
+    total_value = 0.0
+    for symbol in order:
+        bucket = grouped[symbol]
+        q = get_stock_quote(symbol)
         if q.get("error") or q.get("price") is None:
             rows.append(
                 {
-                    "id": show_no(r),
-                    "symbol": r.symbol,
-                    "name": r.name or "",
+                    "symbol": symbol,
+                    "name": bucket["name"],
                     "error": True,
                 }
             )
             continue
+        qty = float(bucket["qty"])
+        cost = float(bucket["cost"])
         current = float(q["price"])
-        cost = r.buy_price * qty_left
-        value = current * qty_left
+        value = current * qty
         pnl = value - cost
         roi = (pnl / cost * 100) if cost else 0.0
         total_cost += cost
         total_value += value
         rows.append(
             {
-                "id": show_no(r),
-                "symbol": r.symbol,
-                "name": q.get("name") or r.name or "",
-                "buy": r.buy_price,
+                "symbol": symbol,
+                "name": q.get("name") or bucket["name"],
+                "buy": (cost / qty) if qty else 0.0,
                 "current": current,
-                "qty": f"{qty_left:.0f} 股",
+                "qty": f"{qty:.0f} 股",
                 "pnl": pnl,
                 "roi": roi,
             }
